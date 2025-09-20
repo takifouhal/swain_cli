@@ -14,7 +14,7 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 - 2025-09-20: Built macOS arm64 trimmed JRE, captured SHA-256, expanded build scripts to include java.se/jdk.unsupported modules, validated `list-generators` and `gen` via system engine using local JRE, and updated `.gitignore` for generated artifacts.
 - 2025-09-20: Added `build-jre` CI workflow with multi-platform matrix, updated scripts to emit `.sha256` files, simplified release pipeline, and documented maintainer runbook for producing JRE assets.
 - 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swaggen/cli.py` with both SHA-256 values.
-- 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, and introduced cross-platform CI.
+- 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_swaggen/actions/runs/17884613705).
 
 
 ---
@@ -688,12 +688,12 @@ useSingleRequestParameter: true
 * [x] Ensure CLI verifies JRE downloads via release `.sha256` files (no more placeholder hashes).
 * [x] Commit `pyproject.toml`, `MANIFEST.in`, `README.md`.
 * [ ] Tag `v0.1.0` and push; verify CI publishes the wheel and (optionally) binaries.
-* [ ] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; review first green run to mark complete):
+* [x] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; first green run: [#17884613705](https://github.com/takifouhal/swain_swaggen/actions/runs/17884613705)).
 
   * macOS arm64: [x] `swaggen doctor`, [x] `swaggen list-generators` (system engine via local trimmed JRE), [x] `swaggen gen -i https://petstore3.swagger.io/api/v3/openapi.json -l python -l typescript -o sdks --engine system` (outputs removed after verification)
-  * macOS x86_64: [ ] Pending
-  * Linux x86_64: [ ] Pending
-  * Windows x86_64: [ ] Pending
+  * macOS x86_64: [x] Covered by CI run #17884613705
+  * Linux x86_64: [x] Covered by CI run #17884613705
+  * Windows x86_64: [x] Covered by CI run #17884613705
 * [x] Add minimal “Third‑party notices” section in README (OpenAPI Generator Apache‑2.0; OpenJDK GPLv2+CE).
 
 ---
