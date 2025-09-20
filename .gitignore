@@ -70,3 +70,11 @@ pnpm-debug.log*
 *.log
 
 # Note: do NOT ignore JARs — we vendor one intentionally.
+
+# Generated SDK output
+sdks/
+
+# Local build artifacts for JRE
+tmp-jdk-*.tar.gz
+swaggen-jre-*.tar.gz
+swaggen-jre-*.zip

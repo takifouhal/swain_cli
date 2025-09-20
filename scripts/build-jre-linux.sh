@@ -27,7 +27,7 @@ fi
   --no-header-files \
   --no-man-pages \
   --strip-debug \
-  --add-modules java.base,java.logging,java.xml,jdk.httpserver \
+  --add-modules java.se,jdk.httpserver,jdk.unsupported \
   --output "$WORKDIR/out/jre"
 
 tar -C "$WORKDIR/out" -czf "$OUTPUT" jre

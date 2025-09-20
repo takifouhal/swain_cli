@@ -22,7 +22,7 @@ try {
         --no-header-files `
         --no-man-pages `
         --strip-debug `
-        --add-modules java.base,java.logging,java.xml,jdk.httpserver `
+        --add-modules java.se,jdk.httpserver,jdk.unsupported `
         --output (Join-Path $out 'jre')
 
     if (Test-Path $OutputZip) {
