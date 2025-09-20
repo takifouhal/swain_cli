@@ -687,7 +687,7 @@ useSingleRequestParameter: true
 * [ ] Trigger the `build-jres` CI job to publish trimmed JRE assets for `jre-21.0.4` (automation committed; run on release tag to upload linux/windows bundles).
 * [x] Ensure CLI verifies JRE downloads via release `.sha256` files (no more placeholder hashes).
 * [x] Commit `pyproject.toml`, `MANIFEST.in`, `README.md`.
-* [ ] Tag `v0.1.0` and push; verify CI publishes the wheel and (optionally) binaries.
+* [ ] Tag `v0.1.0` and push; verify CI publishes the wheel and (optionally) binaries (tag pushed; monitor release workflow for completion).
 * [x] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; first green run: [#17884613705](https://github.com/takifouhal/swain_swaggen/actions/runs/17884613705)).
 
   * macOS arm64: [x] `swaggen doctor`, [x] `swaggen list-generators` (system engine via local trimmed JRE), [x] `swaggen gen -i https://petstore3.swagger.io/api/v3/openapi.json -l python -l typescript -o sdks --engine system` (outputs removed after verification)
