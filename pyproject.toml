@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swaggen"
+version = "0.1.0"
+description = "Zero-setup SDK generator wrapping OpenAPI Generator"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Swain Labs" }
+]
+keywords = [
+  "openapi",
+  "swagger",
+  "sdk",
+  "codegen",
+  "cli"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12"
+]
+
+[project.urls]
+Homepage = "https://github.com/swain-labs/swaggen"
+Repository = "https://github.com/swain-labs/swaggen"
+
+[project.scripts]
+swaggen = "swaggen.cli:main"
+
+[tool.setuptools.package-data]
+swaggen = ["vendor/*.jar"]

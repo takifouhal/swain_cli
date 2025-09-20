@@ -1,0 +1,72 @@
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# Editors/IDE
+.vscode/
+.idea/
+*.iml
+
+# Python: bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python: packaging/build
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Python: testing and coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# Python: type checkers and linters
+.mypy_cache/
+.ruff_cache/
+.pyre/
+dmypy.json
+.dmypy.json
+
+# Python: environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Python: misc
+pip-log.txt
+pip-delete-this-directory.txt
+cython_debug/
+__pypackages__/
+
+# Node (for generated SDKs, if present)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Note: do NOT ignore JARs — we vendor one intentionally.

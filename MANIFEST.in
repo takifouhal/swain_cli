@@ -1,0 +1,5 @@
+include README.md
+include plan.md
+recursive-include examples *.yaml
+recursive-include scripts *.sh *.ps1
+recursive-include swaggen/vendor *.jar
