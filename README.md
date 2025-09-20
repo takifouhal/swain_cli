@@ -57,15 +57,15 @@ The embedded JRE and generator JAR are cached in the per-user cache directory (`
 
 - Use the `build-jre` GitHub Action (workflow dispatch) with the target Temurin version to build trimmed JRE archives across Linux, macOS (Intel + ARM), and Windows. Optionally provide a `release_tag` to upload the outputs and their `.sha256` files directly to the `jre-<version>` GitHub release.
 - After the workflow completes, copy the reported SHA-256 checksums into `swaggen/cli.py` so the CLI can verify downloads.
-- Run the `release` workflow (triggered by `v*` tags) to publish the PyPI package and optional PyInstaller binaries once the assets are in place.
+- Run the `release` workflow (triggered by `v*` tags) to publish the PyPI package and optional PyInstaller binaries once the assets are in place. See `docs/RELEASING.md` for the detailed runbook.
 
 
 ## Contributing
 
 1. Create a virtual environment (`python -m venv .venv`) and activate it
-2. Install the project in editable mode: `pip install -e .`
+2. Install the project in editable mode (including dev extras for tests): `pip install -e .[dev]`
 3. Run `python -m swaggen.cli --help` or invoke `swaggen` using the entry point script
-4. Add or update tests (TODO) and run them
+4. Add or update tests and run them with `python -m pytest`
 
 ## Third-party notices
 
@@ -74,4 +74,4 @@ The embedded JRE and generator JAR are cached in the per-user cache directory (`
 
 ## License
 
-swaggen is released under the Apache 2.0 license. See `LICENSE` (TODO) for details. OpenAPI Generator is licensed under Apache 2.0 and the bundled OpenJDK is licensed under GPLv2 with Classpath Exception.
+swaggen is released under the Apache 2.0 license. See `LICENSE` for details. OpenAPI Generator is licensed under Apache 2.0 and the bundled OpenJDK is licensed under GPLv2 with Classpath Exception.

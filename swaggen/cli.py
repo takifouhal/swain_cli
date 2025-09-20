@@ -8,6 +8,7 @@ import hashlib
 import os
 import platform
 import shutil
+import string
 import subprocess
 import sys
 import tarfile
@@ -36,15 +37,29 @@ VENDOR_JAR_NAME = f"openapi-generator-cli-{PINNED_GENERATOR_VERSION}.jar"
 class JREAsset:
     filename: str
     sha256: Optional[str]
+    checksum_filename: Optional[str] = None
 
 
-# Asset filenames are placeholders until official trimmed runtimes are published.
 JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
-    ("linux", "x86_64"): JREAsset("swaggen-jre-linux-x86_64.tar.gz", None),
-    ("linux", "arm64"): JREAsset("swaggen-jre-linux-arm64.tar.gz", None),
-    ("macos", "x86_64"): JREAsset("swaggen-jre-macos-x86_64.tar.gz", "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6"),
-    ("macos", "arm64"): JREAsset("swaggen-jre-macos-arm64.tar.gz", "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964"),
-    ("windows", "x86_64"): JREAsset("swaggen-jre-windows-x86_64.zip", None),
+    ("linux", "x86_64"): JREAsset(
+        "swaggen-jre-linux-x86_64.tar.gz", None, "swaggen-jre-linux-x86_64.tar.gz.sha256"
+    ),
+    ("linux", "arm64"): JREAsset(
+        "swaggen-jre-linux-arm64.tar.gz", None, "swaggen-jre-linux-arm64.tar.gz.sha256"
+    ),
+    ("macos", "x86_64"): JREAsset(
+        "swaggen-jre-macos-x86_64.tar.gz",
+        "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6",
+        "swaggen-jre-macos-x86_64.tar.gz.sha256",
+    ),
+    ("macos", "arm64"): JREAsset(
+        "swaggen-jre-macos-arm64.tar.gz",
+        "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964",
+        "swaggen-jre-macos-arm64.tar.gz.sha256",
+    ),
+    ("windows", "x86_64"): JREAsset(
+        "swaggen-jre-windows-x86_64.zip", None, "swaggen-jre-windows-x86_64.zip.sha256"
+    ),
 }
 
 
@@ -139,6 +154,38 @@ def get_jre_asset() -> JREAsset:
     return asset
 
 
+def checksum_filename(asset: JREAsset) -> str:
+    return asset.checksum_filename or f"{asset.filename}.sha256"
+
+
+def parse_checksum_file(path: Path) -> str:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise CLIError(f"unable to read checksum file {path}: {exc}") from exc
+
+    for line in lines:
+        candidate = line.strip().split()
+        if not candidate:
+            continue
+        digest = candidate[0].lower()
+        if len(digest) == 64 and all(c in string.hexdigits for c in digest):
+            return digest
+
+    raise CLIError(f"checksum file {path} did not contain a SHA-256 value")
+
+
+def resolve_asset_sha256(asset: JREAsset) -> str:
+    if asset.sha256:
+        return asset.sha256
+
+    name = checksum_filename(asset)
+    checksum_path = downloads_dir() / name
+    url = f"{ASSET_BASE}/{name}"
+    download_file(url, checksum_path, None)
+    return parse_checksum_file(checksum_path)
+
+
 def download_file(url: str, dest: Path, expected_sha256: Optional[str]) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and expected_sha256 and verify_sha256(dest, expected_sha256):
@@ -186,10 +233,13 @@ def ensure_embedded_jre(force: bool = False) -> Path:
         return target_dir
 
     archive_path = downloads_dir() / asset.filename
-    if force and archive_path.exists():
-        archive_path.unlink()
+    checksum_path = downloads_dir() / checksum_filename(asset)
+    if force:
+        archive_path.unlink(missing_ok=True)
+        checksum_path.unlink(missing_ok=True)
     url = f"{ASSET_BASE}/{asset.filename}"
-    download_file(url, archive_path, asset.sha256)
+    expected_sha = resolve_asset_sha256(asset)
+    download_file(url, archive_path, expected_sha)
 
     if target_dir.exists():
         shutil.rmtree(target_dir)

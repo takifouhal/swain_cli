@@ -7,8 +7,108 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-jres:
+    name: Build bundled JREs
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            shell: bash
+            output: swaggen-jre-linux-x86_64.tar.gz
+            script: scripts/build-jre-linux.sh
+            jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_linux_hotspot_21.0.4_7.tar.gz
+            jdk_ext: tar.gz
+          - runner: ubuntu-latest
+            shell: run-on-arch
+            output: swaggen-jre-linux-arm64.tar.gz
+            jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.4_7.tar.gz
+          - runner: macos-13
+            shell: bash
+            output: swaggen-jre-macos-x86_64.tar.gz
+            script: scripts/build-jre-macos.sh
+            jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_mac_hotspot_21.0.4_7.tar.gz
+            jdk_ext: tar.gz
+          - runner: macos-14
+            shell: bash
+            output: swaggen-jre-macos-arm64.tar.gz
+            script: scripts/build-jre-macos.sh
+            jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.4_7.tar.gz
+            jdk_ext: tar.gz
+          - runner: windows-latest
+            shell: pwsh
+            output: swaggen-jre-windows-x86_64.zip
+            jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_windows_hotspot_21.0.4_7.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare output directory
+        if: ${{ matrix.shell != 'pwsh' }}
+        run: mkdir -p dist/jre
+        shell: bash
+
+      - name: Prepare output directory (Windows)
+        if: ${{ matrix.shell == 'pwsh' }}
+        run: New-Item -ItemType Directory -Force -Path dist\jre | Out-Null
+        shell: pwsh
+
+      - name: Build trimmed JRE (native)
+        if: ${{ matrix.shell == 'bash' }}
+        run: |
+          set -euo pipefail
+          curl -L "${{ matrix.jdk_url }}" -o "temurin.${{ matrix.jdk_ext }}"
+          bash "${{ matrix.script }}" "temurin.${{ matrix.jdk_ext }}" "dist/jre/${{ matrix.output }}"
+        shell: bash
+
+      - name: Build trimmed JRE (aarch64)
+        if: ${{ matrix.shell == 'run-on-arch' }}
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update
+            apt-get install -y curl tar
+          run: |
+            set -euo pipefail
+            mkdir -p dist/jre
+            curl -L '${{ matrix.jdk_url }}' -o temurin.tar.gz
+            bash scripts/build-jre-linux.sh temurin.tar.gz dist/jre/${{ matrix.output }}
+
+      - name: Build trimmed JRE (Windows)
+        if: ${{ matrix.shell == 'pwsh' }}
+        run: |
+          Invoke-WebRequest -Uri '${{ matrix.jdk_url }}' -OutFile temurin.zip
+          $output = Join-Path 'dist\jre' '${{ matrix.output }}'
+          ./scripts/build-jre-windows.ps1 -JdkZip temurin.zip -OutputZip $output
+        shell: pwsh
+
+      - name: List outputs
+        run: ls -R dist
+        shell: bash
+        if: ${{ matrix.shell != 'pwsh' }}
+
+      - name: List outputs (Windows)
+        run: Get-ChildItem -Recurse dist
+        shell: pwsh
+        if: ${{ matrix.shell == 'pwsh' }}
+
+      - name: Upload JRE assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/jre/${{ matrix.output }}
+            dist/jre/${{ matrix.output }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish:
     name: Publish to PyPI
+    needs: build-jres
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -42,3 +42,8 @@ swaggen = "swaggen.cli:main"
 
 [tool.setuptools.package-data]
 swaggen = ["vendor/*.jar"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7"
+]
