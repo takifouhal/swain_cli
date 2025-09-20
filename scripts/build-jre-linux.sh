@@ -31,4 +31,4 @@ fi
   --output "$WORKDIR/out/jre"
 
 tar -C "$WORKDIR/out" -czf "$OUTPUT" jre
-sha256sum "$OUTPUT"
+sha256sum "$OUTPUT" | tee "$OUTPUT.sha256"

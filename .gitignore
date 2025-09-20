@@ -78,3 +78,6 @@ sdks/
 tmp-jdk-*.tar.gz
 swaggen-jre-*.tar.gz
 swaggen-jre-*.zip
+
+# Checksum artifacts
+swaggen-jre-*.sha256

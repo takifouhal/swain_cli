@@ -42,8 +42,8 @@ class JREAsset:
 JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
     ("linux", "x86_64"): JREAsset("swaggen-jre-linux-x86_64.tar.gz", None),
     ("linux", "arm64"): JREAsset("swaggen-jre-linux-arm64.tar.gz", None),
-    ("macos", "x86_64"): JREAsset("swaggen-jre-macos-x86_64.tar.gz", None),
-    ("macos", "arm64"): JREAsset("swaggen-jre-macos-arm64.tar.gz", "ba44364ec83ad5587fd1bd5ce8ce805f1d24a50c88b92534cfdae26c35f2bec2"),
+    ("macos", "x86_64"): JREAsset("swaggen-jre-macos-x86_64.tar.gz", "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6"),
+    ("macos", "arm64"): JREAsset("swaggen-jre-macos-arm64.tar.gz", "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964"),
     ("windows", "x86_64"): JREAsset("swaggen-jre-windows-x86_64.zip", None),
 }
 

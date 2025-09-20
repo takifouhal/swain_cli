@@ -53,6 +53,13 @@ Run `swaggen --help` or `swaggen <command> --help` for detailed usage.
 
 The embedded JRE and generator JAR are cached in the per-user cache directory (`~/.cache/swaggen` on Linux, `%LOCALAPPDATA%\\swaggen\\cache` on Windows, `~/Library/Caches/swaggen` on macOS). Checksums are verified when SHA-256 values are available.
 
+## Maintainers
+
+- Use the `build-jre` GitHub Action (workflow dispatch) with the target Temurin version to build trimmed JRE archives across Linux, macOS (Intel + ARM), and Windows. Optionally provide a `release_tag` to upload the outputs and their `.sha256` files directly to the `jre-<version>` GitHub release.
+- After the workflow completes, copy the reported SHA-256 checksums into `swaggen/cli.py` so the CLI can verify downloads.
+- Run the `release` workflow (triggered by `v*` tags) to publish the PyPI package and optional PyInstaller binaries once the assets are in place.
+
+
 ## Contributing
 
 1. Create a virtual environment (`python -m venv .venv`) and activate it

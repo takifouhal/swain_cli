@@ -32,7 +32,7 @@ fi
 
 tar -C "$WORKDIR/out" -czf "$OUTPUT" jre
 if command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$OUTPUT"
+  shasum -a 256 "$OUTPUT" | tee "$OUTPUT.sha256"
 else
-  sha256sum "$OUTPUT"
+  sha256sum "$OUTPUT" | tee "$OUTPUT.sha256"
 fi

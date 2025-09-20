@@ -1,0 +1,137 @@
+name: build-jre
+
+on:
+  workflow_dispatch:
+    inputs:
+      jdk_major:
+        description: 'Temurin major version (e.g. 21)'
+        required: false
+        default: '21'
+      jdk_version:
+        description: 'Temurin version (e.g. 21.0.4)'
+        required: false
+        default: '21.0.4'
+      jdk_build:
+        description: 'Temurin build (e.g. 7)'
+        required: false
+        default: '7'
+      release_tag:
+        description: 'GitHub release tag for assets (created if missing). Leave blank to skip upload.'
+        required: false
+        default: 'jre-21.0.4'
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            temurin_os: linux
+            temurin_arch: x64
+            archive_ext: tar.gz
+            script: scripts/build-jre-linux.sh
+            output: swaggen-jre-linux-x86_64.tar.gz
+          - label: linux-arm64
+            runner: ubuntu-22.04-arm
+            temurin_os: linux
+            temurin_arch: aarch64
+            archive_ext: tar.gz
+            script: scripts/build-jre-linux.sh
+            output: swaggen-jre-linux-arm64.tar.gz
+          - label: macos-x86_64
+            runner: macos-13
+            temurin_os: mac
+            temurin_arch: x64
+            archive_ext: tar.gz
+            script: scripts/build-jre-macos.sh
+            output: swaggen-jre-macos-x86_64.tar.gz
+          - label: macos-arm64
+            runner: macos-14
+            temurin_os: mac
+            temurin_arch: aarch64
+            archive_ext: tar.gz
+            script: scripts/build-jre-macos.sh
+            output: swaggen-jre-macos-arm64.tar.gz
+          - label: windows-x86_64
+            runner: windows-latest
+            temurin_os: windows
+            temurin_arch: x64
+            archive_ext: zip
+            script: scripts/build-jre-windows.ps1
+            output: swaggen-jre-windows-x86_64.zip
+    env:
+      JDK_MAJOR: ${{ inputs.jdk_major }}
+      JDK_VERSION: ${{ inputs.jdk_version }}
+      JDK_BUILD: ${{ inputs.jdk_build }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      DOWNLOAD_URL: ${{ format('https://github.com/adoptium/temurin{0}-binaries/releases/download/jdk-{1}%%2B{2}/OpenJDK{0}U-jdk_{3}_{4}_hotspot_{1}_{2}.{5}', inputs.jdk_major, inputs.jdk_version, inputs.jdk_build, matrix.temurin_arch, matrix.temurin_os, matrix.archive_ext) }}
+      ARCHIVE_FILENAME: ${{ format('jdk-archive.{0}', matrix.archive_ext) }}
+      OUTPUT_NAME: ${{ matrix.output }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Temurin JDK
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail "$DOWNLOAD_URL" -o "$ARCHIVE_FILENAME"
+
+      - name: Download Temurin JDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:DOWNLOAD_URL -OutFile $env:ARCHIVE_FILENAME
+
+      - name: Build trimmed JRE (non-Windows)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${{ matrix.script }}" "$ARCHIVE_FILENAME" "$OUTPUT_NAME"
+
+      - name: Build trimmed JRE (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ${{ matrix.script }} -JdkZip $env:ARCHIVE_FILENAME -OutputZip $env:OUTPUT_NAME
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            ${{ env.OUTPUT_NAME }}
+            ${{ env.OUTPUT_NAME }}.sha256
+
+  publish:
+    name: Publish release assets
+    needs: build
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine checksums
+        run: |
+          set -euo pipefail
+          find artifacts -name '*.sha256' -print -exec cat {} \; > combined-checksums.txt
+
+      - name: Upload to GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          JDK_VERSION: ${{ inputs.jdk_version }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "swaggen JRE $JDK_VERSION" --notes "Trimmed Temurin $JDK_VERSION runtimes built via CI."
+          while IFS= read -r -d '' file; do
+            gh release upload "$RELEASE_TAG" "$file" --clobber
+          done < <(find artifacts -type f -print0)
+          gh release upload "$RELEASE_TAG" combined-checksums.txt --clobber

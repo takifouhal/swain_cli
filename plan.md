@@ -10,9 +10,11 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 
 
 ## Progress updates
-
 - 2025-09-20: Created project scaffolding, implemented CLI, added vendor jar, release workflow, build scripts, and example configs. Updated README with third-party notices and recorded checklist progress.
 - 2025-09-20: Built macOS arm64 trimmed JRE, captured SHA-256, expanded build scripts to include java.se/jdk.unsupported modules, validated `list-generators` and `gen` via system engine using local JRE, and updated `.gitignore` for generated artifacts.
+- 2025-09-20: Added `build-jre` CI workflow with multi-platform matrix, updated scripts to emit `.sha256` files, simplified release pipeline, and documented maintainer runbook for producing JRE assets.
+- 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swaggen/cli.py` with both SHA-256 values.
+
 
 ---
 
@@ -681,7 +683,7 @@ useSingleRequestParameter: true
 ## 10) Implementation checklist
 
 * [x] Add `openapi-generator-cli-7.6.0.jar` to `swaggen/vendor/`.
-* [ ] Implement/build JREs via scripts; upload to GitHub Release `jre-21.0.4` (macOS arm64 artifact built locally; other platforms and upload pending).
+* [ ] Implement/build JREs via scripts or the `build-jre` workflow; upload to GitHub Release `jre-21.0.4` (macOS arm64 + x86_64 artifacts built locally; Linux/Windows builds and release upload pending).
 * [ ] Update `ASSET_BASE` and `JRE_ASSETS` SHA‑256 in `swaggen/cli.py`.
 * [x] Commit `pyproject.toml`, `MANIFEST.in`, `README.md`.
 * [ ] Tag `v0.1.0` and push; verify CI publishes the wheel and (optionally) binaries.
