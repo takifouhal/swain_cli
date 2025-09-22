@@ -11,13 +11,12 @@ import shutil
 import string
 import subprocess
 import sys
-import tarfile
 import tempfile
 import textwrap
 import urllib.error
 import urllib.request
-import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -67,12 +66,90 @@ class CLIError(Exception):
     """Raised for user-facing CLI errors."""
 
 
+@dataclass(frozen=True)
+class PlatformInfo:
+    os_name: str
+    arch: str
+
+    @classmethod
+    def detect(cls) -> "PlatformInfo":
+        return cls(normalize_os(platform.system()), normalize_arch(platform.machine()))
+
+    @property
+    def key(self) -> Tuple[str, str]:
+        return (self.os_name, self.arch)
+
+
+@dataclass(frozen=True)
+class EnginePaths:
+    cache_root: Path
+
+    @classmethod
+    def detect(cls) -> "EnginePaths":
+        explicit = os.environ.get(CACHE_ENV_VAR)
+        if explicit:
+            root = Path(explicit).expanduser()
+            root.mkdir(parents=True, exist_ok=True)
+            return cls(root)
+
+        info = PlatformInfo.detect()
+        home = Path.home()
+        if info.os_name == "windows":
+            base = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        elif info.os_name == "macos":
+            base = home / "Library" / "Caches"
+        else:
+            base = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+
+        root = base / DEFAULT_CACHE_DIR_NAME
+        root.mkdir(parents=True, exist_ok=True)
+        return cls(root)
+
+    def jre_dir(self, info: PlatformInfo) -> Path:
+        return self.cache_root / "jre" / f"{info.os_name}-{info.arch}"
+
+    def jar_dir(self) -> Path:
+        path = self.cache_root / "jars"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def downloads_dir(self) -> Path:
+        path = self.cache_root / "downloads"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def vendor_jar(self) -> Path:
+        return Path(__file__).resolve().parent / "vendor" / VENDOR_JAR_NAME
+
+
+@dataclass
+class EngineSnapshot:
+    platform: PlatformInfo
+    runtime_dir: Path
+    embedded_java: Optional[Path]
+    vendor_jar: Optional[Path]
+    selected_generator: Optional[Path]
+    selected_generator_error: Optional[str]
+    cached_jars: List[str]
+    system_java: Optional[str]
+
+
 def log(message: str) -> None:
     print(f"[swaggen] {message}")
 
 
 def log_error(message: str) -> None:
     print(f"[swaggen] {message}", file=sys.stderr)
+
+
+@lru_cache()
+def get_platform_info() -> PlatformInfo:
+    return PlatformInfo.detect()
+
+
+@lru_cache()
+def get_engine_paths() -> EnginePaths:
+    return EnginePaths.detect()
 
 
 def normalize_os(system: str) -> str:
@@ -96,46 +173,23 @@ def normalize_arch(machine: str) -> str:
 
 
 def cache_root() -> Path:
-    explicit = os.environ.get(CACHE_ENV_VAR)
-    if explicit:
-        path = Path(explicit).expanduser()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    system = normalize_os(platform.system())
-    home = Path.home()
-    if system == "windows":
-        base = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-    elif system == "macos":
-        base = home / "Library" / "Caches"
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
-
-    path = base / DEFAULT_CACHE_DIR_NAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return get_engine_paths().cache_root
 
 
 def jre_install_dir() -> Path:
-    os_name = normalize_os(platform.system())
-    arch = normalize_arch(platform.machine())
-    return cache_root() / "jre" / f"{os_name}-{arch}"
+    return get_engine_paths().jre_dir(get_platform_info())
 
 
 def jar_cache_dir() -> Path:
-    path = cache_root() / "jars"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return get_engine_paths().jar_dir()
 
 
 def downloads_dir() -> Path:
-    path = cache_root() / "downloads"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return get_engine_paths().downloads_dir()
 
 
 def vendor_jar_path() -> Path:
-    return Path(__file__).resolve().parent / "vendor" / VENDOR_JAR_NAME
+    return get_engine_paths().vendor_jar()
 
 
 def find_vendor_jar() -> Optional[Path]:
@@ -144,12 +198,11 @@ def find_vendor_jar() -> Optional[Path]:
 
 
 def get_jre_asset() -> JREAsset:
-    os_name = normalize_os(platform.system())
-    arch = normalize_arch(platform.machine())
-    asset = JRE_ASSETS.get((os_name, arch))
+    info = get_platform_info()
+    asset = JRE_ASSETS.get(info.key)
     if not asset:
         raise CLIError(
-            f"unsupported platform {os_name}/{arch}; install Java and use --engine system"
+            f"unsupported platform {info.os_name}/{info.arch}; install Java and use --engine system"
         )
     return asset
 
@@ -257,22 +310,11 @@ def ensure_embedded_jre(force: bool = False) -> Path:
 
 
 def extract_archive(archive: Path, dest: Path) -> None:
-    if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(dest)
-        return
-
-    if archive.suffixes[-2:] == [".tar", ".gz"] or archive.suffixes[-1:] == [".tgz"]:
-        with tarfile.open(archive, mode="r:gz") as tf:
-            tf.extractall(dest)
-        return
-
-    if archive.suffixes[-2:] == [".tar", ".xz"]:
-        with tarfile.open(archive, mode="r:xz") as tf:
-            tf.extractall(dest)
-        return
-
-    raise CLIError(f"unsupported archive format for {archive.name}")
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.unpack_archive(str(archive), str(dest))
+    except (shutil.ReadError, ValueError) as exc:
+        raise CLIError(f"unsupported archive format for {archive.name}") from exc
 
 
 def normalize_runtime_dir(root: Path) -> None:
@@ -307,6 +349,71 @@ def find_embedded_java(root: Path) -> Optional[Path]:
         if path.name == java_binary_name() and path.parent.name == "bin":
             return path
     return None
+
+
+def collect_engine_snapshot(generator_version: Optional[str]) -> EngineSnapshot:
+    info = get_platform_info()
+    paths = get_engine_paths()
+    runtime_dir = paths.jre_dir(info)
+    embedded_java = find_embedded_java(runtime_dir)
+    vendor = find_vendor_jar()
+    selected: Optional[Path] = None
+    selected_error: Optional[str] = None
+
+    try:
+        selected = resolve_generator_jar(generator_version)
+    except CLIError as exc:
+        selected_error = str(exc)
+
+    cached = list_cached_jars()
+    system_java = shutil.which("java")
+
+    return EngineSnapshot(
+        platform=info,
+        runtime_dir=runtime_dir,
+        embedded_java=embedded_java,
+        vendor_jar=vendor,
+        selected_generator=selected,
+        selected_generator_error=selected_error,
+        cached_jars=cached,
+        system_java=system_java,
+    )
+
+
+def emit_engine_snapshot(
+    snapshot: EngineSnapshot,
+    *,
+    include_selected_generator: bool,
+    include_cached_jars: bool,
+) -> None:
+    runtime_dir = snapshot.runtime_dir
+    log(
+        f"embedded jre dir: {runtime_dir if runtime_dir.exists() else 'not initialized'}"
+    )
+    log(
+        f"embedded java: {snapshot.embedded_java if snapshot.embedded_java else 'not installed'}"
+    )
+    log(
+        f"bundled generator jar: {snapshot.vendor_jar if snapshot.vendor_jar else 'missing'}"
+    )
+
+    if include_selected_generator:
+        if snapshot.selected_generator:
+            log(f"selected generator jar: {snapshot.selected_generator}")
+        elif snapshot.selected_generator_error:
+            log_error(snapshot.selected_generator_error)
+
+    if include_cached_jars:
+        if snapshot.cached_jars:
+            log("cached generator jars:")
+            for entry in snapshot.cached_jars:
+                log(f"  - {entry}")
+        else:
+            log("cached generator jars: none")
+
+    log(
+        f"system java: {snapshot.system_java if snapshot.system_java else 'not found'}"
+    )
 
 
 def resolve_generator_jar(version: Optional[str]) -> Path:
@@ -379,32 +486,20 @@ def run_openapi_generator(jar: Path, engine: str, generator_args: Sequence[str])
 def handle_doctor(args: argparse.Namespace) -> int:
     system = platform.platform()
     python_version = sys.version.replace("\n", " ")
-    os_name = normalize_os(platform.system())
-    arch = normalize_arch(platform.machine())
+    snapshot = collect_engine_snapshot(args.generator_version)
 
     log("doctor report")
     log(f"python: {python_version}")
     log(f"platform: {system}")
-    log(f"detected os/arch: {os_name}/{arch}")
+    log(
+        f"detected os/arch: {snapshot.platform.os_name}/{snapshot.platform.arch}"
+    )
 
-    vendor = find_vendor_jar()
-    log(f"bundled generator jar: {'present' if vendor else 'missing'}")
-
-    try:
-        jar_path = resolve_generator_jar(args.generator_version)
-        log(f"selected generator jar: {jar_path}")
-    except CLIError as exc:
-        log_error(str(exc))
-
-    runtime_dir = jre_install_dir()
-    java_exec = find_embedded_java(runtime_dir)
-    if java_exec:
-        log(f"embedded java: {java_exec}")
-    else:
-        log("embedded java: not installed")
-
-    system_java = shutil.which("java")
-    log(f"system java: {system_java if system_java else 'not found'}")
+    emit_engine_snapshot(
+        snapshot,
+        include_selected_generator=True,
+        include_cached_jars=False,
+    )
     return 0
 
 
@@ -416,6 +511,41 @@ def handle_list_generators(args: argparse.Namespace) -> int:
         log_error("openapi-generator list failed")
         return rc if rc != 0 else EXIT_CODE_SUBPROCESS
     return 0
+
+
+def build_generate_command(
+    schema: str, language: str, args: argparse.Namespace, out_dir: Path
+) -> Tuple[str, Path, List[str]]:
+    resolved_lang = LANGUAGE_ALIASES.get(language, language)
+    target_dir = out_dir / resolved_lang
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [
+        "generate",
+        "-i",
+        schema,
+        "-g",
+        resolved_lang,
+        "-o",
+        str(target_dir),
+    ]
+
+    if args.config:
+        cmd.extend(["-c", args.config])
+    if args.templates:
+        cmd.extend(["-t", args.templates])
+    for prop in args.additional_properties or []:
+        cmd.extend(["-p", prop])
+    for raw_arg in args.generator_arg or []:
+        cmd.append(raw_arg)
+    for var in getattr(args, "property", []) or []:
+        cmd.extend(["-D", var])
+    if args.skip_validate_spec:
+        cmd.append("--skip-validate-spec")
+    if args.verbose:
+        cmd.append("-v")
+
+    return resolved_lang, target_dir, cmd
 
 
 def handle_gen(args: argparse.Namespace) -> int:
@@ -437,34 +567,7 @@ def handle_gen(args: argparse.Namespace) -> int:
         raise CLIError("at least one --lang is required")
 
     for lang in languages:
-        resolved_lang = LANGUAGE_ALIASES.get(lang, lang)
-        target_dir = out_dir / resolved_lang
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        cmd: List[str] = [
-            "generate",
-            "-i",
-            schema,
-            "-g",
-            resolved_lang,
-            "-o",
-            str(target_dir),
-        ]
-
-        if args.config:
-            cmd.extend(["-c", args.config])
-        if args.templates:
-            cmd.extend(["-t", args.templates])
-        for prop in args.additional_properties or []:
-            cmd.extend(["-p", prop])
-        for raw_arg in args.generator_arg or []:
-            cmd.append(raw_arg)
-        for var in args.property:
-            cmd.extend(["-D", var])
-        if args.skip_validate_spec:
-            cmd.append("--skip-validate-spec")
-        if args.verbose:
-            cmd.append("-v")
+        resolved_lang, target_dir, cmd = build_generate_command(schema, lang, args, out_dir)
 
         log(f"generating {resolved_lang} into {target_dir}")
         rc = run_openapi_generator(jar, engine, cmd)
@@ -476,25 +579,14 @@ def handle_gen(args: argparse.Namespace) -> int:
 
 
 def handle_engine_status(args: argparse.Namespace) -> int:
-    runtime_dir = jre_install_dir()
-    java_exec = find_embedded_java(runtime_dir)
-    vendor = find_vendor_jar()
+    snapshot = collect_engine_snapshot(None)
 
     log("engine status")
-    log(f"embedded jre dir: {runtime_dir if runtime_dir.exists() else 'not initialized'}")
-    log(f"embedded java: {java_exec if java_exec else 'not installed'}")
-    log(f"bundled generator jar: {vendor if vendor else 'missing'}")
-
-    cached = list_cached_jars()
-    if cached:
-        log("cached generator jars:")
-        for entry in cached:
-            log(f"  - {entry}")
-    else:
-        log("cached generator jars: none")
-
-    system_java = shutil.which("java")
-    log(f"system java: {system_java if system_java else 'not found'}")
+    emit_engine_snapshot(
+        snapshot,
+        include_selected_generator=False,
+        include_cached_jars=True,
+    )
     return 0
 
 

@@ -47,3 +47,6 @@ swaggen = ["vendor/*.jar"]
 dev = [
   "pytest>=7"
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

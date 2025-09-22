@@ -1,6 +1,8 @@
+import argparse
 import os
 import subprocess
 import sys
+
 import pytest
 
 import swaggen.cli as cli
@@ -26,11 +28,17 @@ def test_normalize_arch_variants():
 
 
 def test_cache_root_honors_env(tmp_path, monkeypatch):
+    cli.get_engine_paths.cache_clear()
+    cli.get_platform_info.cache_clear()
     explicit = tmp_path / "custom-cache"
     monkeypatch.setenv(cli.CACHE_ENV_VAR, str(explicit))
-    result = cli.cache_root()
-    assert result == explicit
-    assert result.is_dir()
+    try:
+        result = cli.cache_root()
+        assert result == explicit
+        assert result.is_dir()
+    finally:
+        cli.get_engine_paths.cache_clear()
+        cli.get_platform_info.cache_clear()
 
 
 def test_get_jre_asset_unsupported(monkeypatch):
@@ -53,3 +61,39 @@ def test_cli_help_invocation(tmp_path):
         check=True,
     )
     assert "usage" in completed.stdout.lower()
+
+
+def test_build_generate_command_alias(tmp_path):
+    args = argparse.Namespace(
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+    )
+
+    resolved, target, cmd = cli.build_generate_command(
+        "schema.yaml", "typescript", args, tmp_path
+    )
+
+    assert resolved == "typescript-axios"
+    assert target == tmp_path / "typescript-axios"
+    assert cmd[:7] == [
+        "generate",
+        "-i",
+        "schema.yaml",
+        "-g",
+        "typescript-axios",
+        "-o",
+        str(target),
+    ]
+
+
+def test_extract_archive_unknown(tmp_path):
+    archive = tmp_path / "archive.xyz"
+    archive.write_text("dummy")
+
+    with pytest.raises(cli.CLIError):
+        cli.extract_archive(archive, tmp_path / "out")
