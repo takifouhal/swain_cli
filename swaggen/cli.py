@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 import platform
+import shlex
 import shutil
 import string
 import subprocess
@@ -18,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 JRE_VERSION = "21.0.4"
@@ -29,7 +30,19 @@ CACHE_ENV_VAR = "SWAGGEN_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swaggen"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
+EXIT_CODE_INTERRUPT = 130
 LANGUAGE_ALIASES = {"typescript": "typescript-axios"}
+
+COMMON_LANGUAGES = [
+    "python",
+    "typescript",
+    "go",
+    "java",
+    "csharp",
+    "ruby",
+    "kotlin",
+    "swift",
+]
 
 VENDOR_JAR_NAME = f"openapi-generator-cli-{PINNED_GENERATOR_VERSION}.jar"
 
@@ -648,6 +661,274 @@ def is_url(path: str) -> bool:
     return "://" in path
 
 
+class InteractionAborted(Exception):
+    """Raised when the interactive session is cancelled."""
+
+
+def safe_input(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except EOFError as exc:
+        raise InteractionAborted() from exc
+    except KeyboardInterrupt as exc:
+        print()
+        raise InteractionAborted() from exc
+
+
+def prompt_loop(
+    prompt: str,
+    *,
+    default: Optional[str] = None,
+    allow_empty: bool = False,
+    validator: Optional[Callable[[str], Optional[str]]] = None,
+) -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        response = safe_input(f"{prompt}{suffix}: ").strip()
+        if not response and default is not None:
+            response = default
+        if not response and not allow_empty:
+            log_error("please enter a value")
+            continue
+        if validator:
+            error = validator(response)
+            if error:
+                log_error(error)
+                continue
+        return response
+
+
+def prompt_yes_no(prompt: str, *, default: bool) -> bool:
+    default_str = "Y/n" if default else "y/N"
+    while True:
+        response = safe_input(f"{prompt} [{default_str}]: ").strip().lower()
+        if not response:
+            return default
+        if response in {"y", "yes"}:
+            return True
+        if response in {"n", "no"}:
+            return False
+        log_error("please answer with 'y' or 'n'")
+
+
+def guess_default_schema() -> Optional[Path]:
+    for candidate in (
+        Path("openapi.yaml"),
+        Path("openapi.yml"),
+        Path("swagger.yaml"),
+        Path("swagger.yml"),
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def format_cli_command(argv: Sequence[str]) -> str:
+    return shlex.join(str(part) for part in argv)
+
+
+def handle_interactive(args: argparse.Namespace) -> int:
+    log("interactive SDK generation wizard")
+    log("press Ctrl+C at any time to cancel")
+
+    schema_default = guess_default_schema()
+
+    def validate_schema(value: str) -> Optional[str]:
+        if is_url(value):
+            return None
+        path = Path(value).expanduser()
+        if not path.exists():
+            return f"schema not found at {path}"
+        return None
+
+    try:
+        schema_input = prompt_loop(
+            "Schema path or URL",
+            default=str(schema_default) if schema_default else None,
+            validator=validate_schema,
+        )
+
+        out_default = "sdks"
+
+        def validate_out_dir(value: str) -> Optional[str]:
+            path = Path(value).expanduser()
+            if path.exists() and not path.is_dir():
+                return "output path exists and is not a directory"
+            return None
+
+        out_dir_input = prompt_loop(
+            "Output directory",
+            default=out_default,
+            validator=validate_out_dir,
+        )
+
+        language_hint = ", ".join(COMMON_LANGUAGES)
+
+        def parse_languages(raw: str) -> List[str]:
+            entries = [
+                item.strip()
+                for item in raw.replace(";", ",").split(",")
+                if item.strip()
+            ]
+            return entries
+
+        def validate_languages(raw: str) -> Optional[str]:
+            parsed = parse_languages(raw)
+            if not parsed:
+                return "please provide at least one language"
+            return None
+
+        languages_raw = prompt_loop(
+            f"Target languages (comma separated, e.g. {language_hint})",
+            default="python,typescript",
+            validator=validate_languages,
+        )
+        languages = [lang.lower() for lang in parse_languages(languages_raw)]
+
+        def validate_optional_file(value: str) -> Optional[str]:
+            if not value:
+                return None
+            path = Path(value).expanduser()
+            if not path.exists():
+                return f"config file {path} does not exist"
+            if not path.is_file():
+                return f"config path {path} is not a file"
+            return None
+
+        config_input = prompt_loop(
+            "Generator config file (optional)",
+            allow_empty=True,
+            validator=validate_optional_file,
+        )
+        config_value = str(Path(config_input).expanduser()) if config_input else None
+
+        def validate_optional_dir(value: str) -> Optional[str]:
+            if not value:
+                return None
+            path = Path(value).expanduser()
+            if not path.exists():
+                return f"templates directory {path} does not exist"
+            if not path.is_dir():
+                return f"templates path {path} is not a directory"
+            return None
+
+        templates_input = prompt_loop(
+            "Custom templates directory (optional)",
+            allow_empty=True,
+            validator=validate_optional_dir,
+        )
+        templates_value = (
+            str(Path(templates_input).expanduser()) if templates_input else None
+        )
+
+        additional_properties: List[str] = []
+        if prompt_yes_no("Add additional properties (-p key=value) ?", default=False):
+            log("enter key=value pairs; leave blank when finished")
+            while True:
+                entry = prompt_loop(
+                    "Additional property",
+                    allow_empty=True,
+                )
+                if not entry:
+                    break
+                if "=" not in entry:
+                    log_error("enter values in key=value format")
+                    continue
+                additional_properties.append(entry)
+
+        sys_props: List[str] = []
+        if prompt_yes_no("Add system properties (-D key=value)?", default=False):
+            log("enter key=value pairs; leave blank when finished")
+            while True:
+                entry = prompt_loop(
+                    "System property",
+                    allow_empty=True,
+                )
+                if not entry:
+                    break
+                sys_props.append(entry)
+
+        generator_args: List[str] = []
+        if prompt_yes_no("Add raw OpenAPI Generator args?", default=False):
+            log("enter arguments exactly as OpenAPI Generator expects; blank to finish")
+            while True:
+                entry = prompt_loop("Generator argument", allow_empty=True)
+                if not entry:
+                    break
+                generator_args.append(entry)
+
+        engine_choice = "embedded" if prompt_yes_no(
+            "Use embedded Java runtime?", default=True
+        ) else "system"
+
+        skip_validate = prompt_yes_no(
+            "Skip OpenAPI spec validation?", default=False
+        )
+        verbose = prompt_yes_no("Enable verbose generator output?", default=False)
+
+    except InteractionAborted:
+        log_error("interactive session cancelled")
+        return EXIT_CODE_INTERRUPT
+
+    schema_value = (
+        schema_input
+        if is_url(schema_input)
+        else str(Path(schema_input).expanduser())
+    )
+    out_value = str(Path(out_dir_input).expanduser())
+
+    log("configuration preview")
+    log(f"  schema: {schema_value}")
+    log(f"  output: {out_value}")
+    log(f"  languages: {', '.join(languages)}")
+    if config_value:
+        log(f"  config: {config_value}")
+    if templates_value:
+        log(f"  templates: {templates_value}")
+    if additional_properties:
+        log(f"  additional properties: {additional_properties}")
+    if sys_props:
+        log(f"  system properties: {sys_props}")
+    if generator_args:
+        log(f"  extra generator args: {generator_args}")
+    log(f"  engine: {engine_choice}")
+    log(f"  skip validate: {skip_validate}")
+    log(f"  verbose: {verbose}")
+
+    command_preview: List[str] = ["swaggen"]
+    if args.generator_version:
+        command_preview.extend(["--generator-version", args.generator_version])
+    command_preview.extend(["gen", "-i", schema_value, "-o", out_value])
+    for lang in languages:
+        command_preview.extend(["-l", lang])
+    if config_value:
+        command_preview.extend(["-c", config_value])
+    if templates_value:
+        command_preview.extend(["-t", templates_value])
+    for prop in additional_properties:
+        command_preview.extend(["-p", prop])
+    for arg in generator_args:
+        command_preview.extend(["--generator-arg", arg])
+    for sys_prop in sys_props:
+        command_preview.extend(["-D", sys_prop])
+    if skip_validate:
+        command_preview.append("--skip-validate-spec")
+    if verbose:
+        command_preview.append("-v")
+    if engine_choice != "embedded":
+        command_preview.extend(["--engine", engine_choice])
+
+    log(f"equivalent command: {format_cli_command(command_preview)}")
+
+    if not prompt_yes_no("Run generation now?", default=True):
+        log("generation skipped; run the command above when ready")
+        return 0
+
+    parser = build_parser()
+    parsed_args = parser.parse_args(command_preview[1:])
+    return parsed_args.func(parsed_args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="swaggen CLI")
     parser.add_argument(
@@ -657,6 +938,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
+
+    parser_interactive = subparsers.add_parser(
+        "interactive", help="guided wizard to collect generator options"
+    )
+    parser_interactive.set_defaults(func=handle_interactive)
 
     parser_doctor = subparsers.add_parser("doctor", help="show environment diagnostics")
     parser_doctor.set_defaults(func=handle_doctor)

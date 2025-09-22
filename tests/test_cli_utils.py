@@ -97,3 +97,79 @@ def test_extract_archive_unknown(tmp_path):
 
     with pytest.raises(cli.CLIError):
         cli.extract_archive(archive, tmp_path / "out")
+
+
+def test_interactive_wizard_skip_generation(monkeypatch, capfd):
+    responses = iter(
+        [
+            "http://example.com/openapi.yaml",  # schema
+            "sdks",  # output directory
+            "TypeScript",  # languages (case-insensitive)
+            "",  # config
+            "",  # templates
+            "n",  # additional properties
+            "n",  # system properties
+            "n",  # raw generator args
+            "",  # use embedded (default yes)
+            "n",  # skip validation
+            "n",  # verbose
+            "n",  # run now
+        ]
+    )
+
+    def fake_input(prompt: str) -> str:
+        try:
+            return next(responses)
+        except StopIteration:  # pragma: no cover - defensive guard
+            pytest.fail("interactive wizard requested more input than expected")
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
+
+    result = cli.handle_interactive(argparse.Namespace(generator_version=None))
+    assert result == 0
+
+    captured = capfd.readouterr()
+    assert "interactive SDK generation wizard" in captured.out
+    assert "swaggen gen -i http://example.com/openapi.yaml -o sdks -l typescript" in captured.out
+
+
+def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):
+    schema = tmp_path / "openapi.yaml"
+    schema.write_text("openapi: 3.0.0")
+    config_valid = tmp_path / "config.yaml"
+    config_valid.write_text("generator: python")
+
+    responses = iter(
+        [
+            str(schema),  # schema path
+            str(tmp_path / "sdks"),  # output directory
+            "python",  # languages
+            str(tmp_path / "missing.yaml"),  # config (first attempt - invalid)
+            str(config_valid),  # config (second attempt - valid)
+            "",  # templates
+            "n",  # additional properties
+            "n",  # system properties
+            "n",  # raw generator args
+            "",  # use embedded (default yes)
+            "n",  # skip validation
+            "n",  # verbose
+            "n",  # run now
+        ]
+    )
+
+    def fake_input(prompt: str) -> str:
+        try:
+            return next(responses)
+        except StopIteration:  # pragma: no cover
+            pytest.fail("interactive wizard requested more input than expected")
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
+
+    result = cli.handle_interactive(argparse.Namespace(generator_version=None))
+    assert result == 0
+
+    out, err = capfd.readouterr()
+    assert "config file" in err
+    assert str(config_valid) in out

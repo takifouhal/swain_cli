@@ -23,6 +23,9 @@ pipx install swaggen
 # (optional) Pre-install the embedded runtime to skip the first-run download
 swaggen engine install-jre
 
+# (optional) Guided wizard that builds your swaggen gen command
+swaggen interactive
+
 # List all bundled generators (delegates to the pinned OpenAPI Generator)
 swaggen list-generators
 
@@ -35,6 +38,7 @@ swaggen gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 
 ## Command overview
 - `swaggen gen` — generate one or more SDKs; accepts the same configuration flags as OpenAPI Generator (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options
+- `swaggen interactive` — answer a short Q&A and swaggen assembles (and optionally runs) the matching `swaggen gen` command
 - `swaggen list-generators` — enumerate supported generators; add `--engine system` to check a local Java installation
 - `swaggen doctor` — print environment details, cache paths, installed JREs, and whether the vendor JAR is available
 - `swaggen engine <action>` — manage the embedded runtime (`status`, `install-jre`, `update-jar`, `use-system`, `use-embedded`)
