@@ -1,52 +1,62 @@
 # Releasing swaggen
 
-This guide walks through shipping a tagged release with bundled JRE assets and PyPI artifacts.
+This runbook covers the end-to-end steps for shipping a tagged release that includes updated JRE assets and PyPI artifacts.
 
-## 1. Prepare the repo
+## Quick reference
+- **Version bump locations**: `pyproject.toml`, `swaggen/__init__.py`, and anywhere else the version is surfaced to users.
+- **Cached assets**: Update embedded JRE checksums in `swaggen/cli.py` when new archives are produced.
+- **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
 
-1. Ensure `main` is up to date and the changelog/plan is ready.
-2. Run the test suite locally: `python -m pytest`.
-3. (Optional) Build and sanity check the CLI with the embedded JRE on macOS using `swaggen engine install-jre` and `swaggen gen ...`.
+## 1. Pre-release checklist
+- Confirm `main` contains the changes you intend to release and that `plan.md` or changelog notes are up to date.
+- Run the full test suite locally: `python -m pytest`.
+- Update the version number where required and commit the result (for example, `"Release v0.x.y"`).
+- If the JRE archives changed, record new SHA-256 values in `swaggen/cli.py` and verify the filenames match the release assets.
+- Smoke-test the CLI locally using both the embedded and system engines if possible:
+  ```bash
+  swaggen engine install-jre
+  swaggen doctor
+  swaggen gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks
+  swaggen gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks --engine system
+  ```
 
-## 2. Tag the release
+## 2. Produce JRE archives (only when needed)
+1. Trigger the `build-jre` workflow via the GitHub Actions UI.
+2. Provide the desired Temurin version and an optional `release_tag` (`jre-<version>`). The workflow runs the platform-specific scripts in `scripts/` to build trimmed JREs.
+3. When the workflow finishes, download the `.sha256` files from the logs/artifacts and paste the sums into `swaggen/cli.py`.
+4. If you skipped the optional `release_tag`, upload the produced archives and checksums manually to the appropriate GitHub release.
 
+## 3. Tag the release
 ```bash
-# Bump versions as needed (pyproject.toml, swaggen/__init__.py, etc.)
-git commit -am "Release v0.x.y"
+# After committing the version bump and checksum updates
+git push origin main
 git tag v0.x.y
-git push origin main --tags
+git push origin v0.x.y
 ```
 
-Pushing the `v*` tag triggers the `release` workflow automatically.
+Pushing the tag triggers the `release` workflow automatically.
 
-## 3. What the GitHub Actions workflows do
+## 4. GitHub Actions workflows
+- **`release.yml`**
+  1. `build-jres` matrix builds the trimmed JRE archives for Linux (x86_64/arm64), macOS (Intel/Apple Silicon), and Windows. Each archive and companion `.sha256` file is uploaded to the GitHub Release for the tag.
+  2. `publish` waits for `build-jres`, then runs `python -m build` and uploads the sdist/wheel to PyPI using `PYPI_API_TOKEN`.
+  3. `binaries` (optional) runs PyInstaller on Linux/macOS/Windows and attaches the executables to the release.
+- **`ci.yml`** runs on every push/PR to ensure the test suite passes. Confirm the latest PR before tagging is green.
 
-### `release.yml`
+## 5. Verify the release
+1. Wait for the `release` workflow to succeed.
+2. Check the tagged GitHub Release page and confirm all JRE archives plus `.sha256` files exist.
+3. Optionally download an archive (for example `swaggen-jre-linux-x86_64.tar.gz`) and verify its checksum locally.
+4. Install the published package from PyPI in a clean environment (e.g. `pipx install swaggen`) and run a quick smoke test with `swaggen doctor` and `swaggen list-generators`.
+5. Update `plan.md` with release notes or status.
 
-1. **build-jres** (matrix)
-   - Downloads Temurin JDKs for linux (x64 + arm64), macOS (Intel + Apple Silicon), and Windows.
-   - Invokes `scripts/build-jre-*.{sh,ps1}` to produce trimmed runtimes.
-   - Uploads each archive and `.sha256` checksum to the GitHub release created for the tag.
-2. **publish** (needs: build-jres)
-   - Builds the source and wheel distributions via `python -m build`.
-   - Publishes to PyPI using `PYPI_API_TOKEN`.
-3. **binaries** (optional)
-   - Runs PyInstaller across Linux/macOS/Windows and uploads single-file executables to the release.
+## 6. Troubleshooting
+- **Matrix failures**: Re-run the failing job from the Actions UI; Linux ARM64 uses `uraimo/run-on-arch-action` and may flake occasionally.
+- **PyPI upload issues**: Ensure `PYPI_API_TOKEN` is valid, assigned to the project, and stored as an Actions secret.
+- **Windows packaging quirks**: Download the Temurin JDK manually and execute `scripts/build-jre-windows.ps1` via PowerShell to reproduce locally.
+- **Stale caches**: If the embedded JRE changes between releases, warn users to reinstall via `swaggen engine install-jre` or remove the cache directory printed by `swaggen doctor`.
 
-### `ci.yml`
-
-- Runs `python -m pytest` against Python 3.8 and 3.11 on Ubuntu, macOS (Intel + ARM), and Windows for every push/PR.
-
-## 4. Verify the release
-
-1. Wait for the `release` workflow to finish and confirm the JRE assets appear under the release.
-2. Download one of the artifacts (e.g., `swaggen-jre-linux-x86_64.tar.gz`) and verify the checksum locally if desired.
-3. Install the published package from PyPI in a clean environment (e.g., via `pipx install swaggen`) and run a smoke test.
-4. Update `plan.md` with the release details and mark checklist items completed.
-
-## 5. Troubleshooting
-
-- If the JRE build job fails on Linux ARM64, re-run that matrix item from the Actions UI (the job uses `uraimo/run-on-arch-action`).
-- If PyPI upload fails, ensure `PYPI_API_TOKEN` is set in the repo secrets and has the correct privileges.
-- For Windows-specific JRE issues, download the JDK URL manually and run `scripts/build-jre-windows.ps1` with PowerShell to reproduce.
-
+## 7. After the release
+- Announce the release (for example in project channels or release notes).
+- Close or update any GitHub issues tied to the milestone.
+- Archive temporary artifacts (local `tmp-sdks`, downloaded JRE archives) to keep the workspace clean.
