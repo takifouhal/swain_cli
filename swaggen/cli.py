@@ -22,7 +22,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 JRE_VERSION = "21.0.4"
-ASSET_BASE = "https://github.com/swain-labs/swaggen/releases/download/jre-21.0.4"
+# Location of the published JRE archives and checksums. Maintain in lockstep with
+# the release workflow assets so downloads resolve correctly.
+ASSET_BASE = "https://github.com/takifouhal/swain_swaggen/releases/download/v0.1.0"
 CACHE_ENV_VAR = "SWAGGEN_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swaggen"
 EXIT_CODE_SUBPROCESS = 1
@@ -48,12 +50,12 @@ JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
     ),
     ("macos", "x86_64"): JREAsset(
         "swaggen-jre-macos-x86_64.tar.gz",
-        "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6",
+        "eaf80148765e13e846371eac654fbc8c109f8cf5d369114fd90d944c384e0535",
         "swaggen-jre-macos-x86_64.tar.gz.sha256",
     ),
     ("macos", "arm64"): JREAsset(
         "swaggen-jre-macos-arm64.tar.gz",
-        "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964",
+        "48ae1d63c47e9ade617e2d321889b2675b755c1d2b7db465601b47c0823cff9d",
         "swaggen-jre-macos-arm64.tar.gz.sha256",
     ),
     ("windows", "x86_64"): JREAsset(

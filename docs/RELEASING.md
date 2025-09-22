@@ -4,7 +4,7 @@ This runbook covers the end-to-end steps for shipping a tagged release that incl
 
 ## Quick reference
 - **Version bump locations**: `pyproject.toml`, `swaggen/__init__.py`, and anywhere else the version is surfaced to users.
-- **Cached assets**: Update embedded JRE checksums in `swaggen/cli.py` when new archives are produced.
+- **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swaggen/cli.py` whenever you move the downloads to a new release tag.
 - **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
 
 ## 1. Pre-release checklist

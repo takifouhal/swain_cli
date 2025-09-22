@@ -72,7 +72,7 @@ Run `swaggen --help` or `swaggen <command> --help` for complete usage.
 
 ## Maintainers
 - Use the `build-jre` GitHub Action (workflow dispatch) to produce trimmed JRE archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows. Optionally provide a `release_tag` to upload artifacts directly to a `jre-<version>` release.
-- After the workflow finishes, copy the resulting `.sha256` values into `swaggen/cli.py` so the CLI can verify downloads.
+- After the workflow finishes, copy the resulting `.sha256` values into `swaggen/cli.py` so the CLI can verify downloads, and adjust `ASSET_BASE` if you publish assets under a new release tag.
 - Trigger the `release` workflow by pushing a `v*` tag once assets are in place. It builds the PyPI distributions and optional PyInstaller binaries. The full release runbook lives in `docs/RELEASING.md`.
 
 ## Third-party notices
