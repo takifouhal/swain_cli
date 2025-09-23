@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-import swaggen.cli as cli
+import swain_cli.cli as cli
 
 
 def test_typescript_alias():
@@ -54,9 +54,9 @@ def test_get_jre_asset_unsupported(monkeypatch):
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX-only path expectations")
 def test_cli_help_invocation(tmp_path):
     env = os.environ.copy()
-    env["SWAGGEN_CACHE_DIR"] = str(tmp_path)
+    env["SWAIN_CLI_CACHE_DIR"] = str(tmp_path)
     completed = subprocess.run(
-        [sys.executable, "-m", "swaggen.cli", "--help"],
+        [sys.executable, "-m", "swain_cli.cli", "--help"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -136,7 +136,7 @@ def test_fetch_crudsql_schema_success(monkeypatch):
     def fake_urlopen(request):
         calls.append(request.full_url)
         assert request.headers["Authorization"] == "Bearer token123"
-        assert "swaggen" in request.get_header("User-agent")
+        assert "swain_cli" in request.get_header("User-agent")
         if request.full_url.endswith("/api/schema-location"):
             return DiscoveryResponse()
         assert request.full_url == "https://api.example.com/openapi/custom.json"
@@ -257,7 +257,7 @@ def test_interactive_wizard_skip_generation(monkeypatch, capfd):
 
     captured = capfd.readouterr()
     assert "interactive SDK generation wizard" in captured.out
-    assert "swaggen gen -i http://example.com/openapi.yaml -o sdks -l typescript" in captured.out
+    assert "swain_cli gen -i http://example.com/openapi.yaml -o sdks -l typescript" in captured.out
 
 
 def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):

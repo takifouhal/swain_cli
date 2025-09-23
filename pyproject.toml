@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "swaggen"
+name = "swain_cli"
 version = "0.1.0"
 description = "Zero-setup SDK generator wrapping OpenAPI Generator"
 readme = "README.md"
@@ -34,14 +34,14 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/swain-labs/swaggen"
-Repository = "https://github.com/swain-labs/swaggen"
+Homepage = "https://github.com/takifouhal/swain_cli"
+Repository = "https://github.com/takifouhal/swain_cli"
 
 [project.scripts]
-swaggen = "swaggen.cli:main"
+swain_cli = "swain_cli.cli:main"
 
 [tool.setuptools.package-data]
-swaggen = ["vendor/*.jar"]
+swain_cli = ["vendor/*.jar"]
 
 [project.optional-dependencies]
 dev = [

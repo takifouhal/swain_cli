@@ -2,19 +2,19 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 
 ---
 
-# Project: **swaggen** — Zero‑setup SDK generator from OpenAPI
+# Project: **swain_cli** — Zero‑setup SDK generator from OpenAPI
 
 **Goal**: Deliver a CLI that takes a Swagger/OpenAPI schema and generates SDK clients for chosen target languages using **OpenAPI Generator**, with **no user setup** beyond installing our CLI.
 
-**Primary UX**: `pipx install swaggen` → `swaggen gen -i openapi.yaml -l python -l typescript -o sdks`
+**Primary UX**: `pipx install swain_cli` → `swain_cli gen -i openapi.yaml -l python -l typescript -o sdks`
 
 
 ## Progress updates
 - 2025-09-20: Created project scaffolding, implemented CLI, added vendor jar, release workflow, build scripts, and example configs. Updated README with third-party notices and recorded checklist progress.
 - 2025-09-20: Built macOS arm64 trimmed JRE, captured SHA-256, expanded build scripts to include java.se/jdk.unsupported modules, validated `list-generators` and `gen` via system engine using local JRE, and updated `.gitignore` for generated artifacts.
 - 2025-09-20: Added `build-jre` CI workflow with multi-platform matrix, updated scripts to emit `.sha256` files, simplified release pipeline, and documented maintainer runbook for producing JRE assets.
-- 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swaggen/cli.py` with both SHA-256 values.
-- 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_swaggen/actions/runs/17884613705).
+- 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swain_cli/cli.py` with both SHA-256 values.
+- 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705).
 
 
 ---
@@ -57,16 +57,16 @@ These choices are made to optimize developer experience, reproducibility, and ma
 
 ### Commands
 
-* `swaggen doctor`
+* `swain_cli doctor`
   Prints environment and engine status. Does not mutate state.
 
-* `swaggen list-generators [--engine embedded|system]`
+* `swain_cli list-generators [--engine embedded|system]`
   Runs `openapi-generator list` using our bundled engine.
 
-* `swaggen gen -i|--schema <path|url> -l|--lang <gen> [-l <gen> ...] -o|--out <dir> [options]`
+* `swain_cli gen -i|--schema <path|url> -l|--lang <gen> [-l <gen> ...] -o|--out <dir> [options]`
   Generates SDKs for one or more generators. Accepts paths or URLs for schemas.
 
-* `swaggen engine <action>`
+* `swain_cli engine <action>`
   Engine utilities:
 
   * `status` – shows system Java, embedded JRE/JAR status
@@ -92,7 +92,7 @@ These choices are made to optimize developer experience, reproducibility, and ma
 
 ### Logging
 
-* All swaggen messages are prefixed with `[swaggen]`.
+* All swain_cli messages are prefixed with `[swain_cli]`.
 * We stream the generator’s stdout/stderr live (no buffering), so users see progress.
 
 ---
@@ -100,11 +100,11 @@ These choices are made to optimize developer experience, reproducibility, and ma
 ## 3) Repository layout
 
 ```
-swaggen/
+swain_cli/
 ├── pyproject.toml
 ├── MANIFEST.in
 ├── README.md
-├── swaggen/
+├── swain_cli/
 │   ├── __init__.py
 │   ├── cli.py                # <-- main CLI (complete code below)
 │   └── vendor/
@@ -121,13 +121,13 @@ swaggen/
 
 ## 4) Complete CLI (drop-in)
 
-Save as `swaggen/cli.py`.
+Save as `swain_cli/cli.py`.
 
 > Fill in `ASSET_BASE` and `JRE_ASSETS` filenames; you’ll publish these JRE archives via GitHub Releases (see §6). You can initially set the SHA fields to `None` during bring‑up; add real SHA‑256s before release.
 
 ```python
 #!/usr/bin/env python3
-# swaggen/cli.py
+# swain_cli/cli.py
 import argparse
 import hashlib
 import os
@@ -148,8 +148,8 @@ ENGINE_JAR_NAME = f"openapi-generator-cli-{ENGINE_VERSION}.jar"
 MAVEN_URL = f"https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/{ENGINE_VERSION}/{ENGINE_JAR_NAME}"
 
 # Host per-OS trimmed JRE archives you build with jlink (see scripts/ and CI section).
-# Example: https://github.com/your-org/swaggen/releases/download/jre-21.0.4/<files>
-ASSET_BASE = "https://github.com/your-org/swaggen/releases/download/jre-21.0.4"
+# Example: https://github.com/takifouhal/swain_cli/releases/download/jre-21.0.4/<files>
+ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/jre-21.0.4"
 
 # Map of (OS, ARCH) to (filename, sha256 or None). Fill with real SHA256 before release.
 JRE_ASSETS: Dict[tuple, tuple] = {
@@ -164,16 +164,16 @@ JRE_ASSETS: Dict[tuple, tuple] = {
 def default_cache_dir() -> Path:
     if sys.platform.startswith("win"):
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return base / "swaggen"
+        return base / "swain_cli"
     elif sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "swaggen"
+        return Path.home() / "Library" / "Caches" / "swain_cli"
     else:
-        return Path.home() / ".cache" / "swaggen"
+        return Path.home() / ".cache" / "swain_cli"
 
 CACHE_DIR = default_cache_dir()
 
 # ====== Utilities ======
-def info(msg: str): print(f"[swaggen] {msg}")
+def info(msg: str): print(f"[swain_cli] {msg}")
 def die(msg: str, code: int = 2): print(f"error: {msg}", file=sys.stderr); sys.exit(code)
 def which(cmd: str) -> Optional[str]: return shutil.which(cmd)
 
@@ -220,7 +220,7 @@ class EngineManager:
         self.cache = cache_dir
         self.jre_dir = self.cache / "jre"
         self.jar_dir = self.cache / "openapi-generator"
-        self.pkg_dir = Path(__file__).parent  # swaggen package dir
+        self.pkg_dir = Path(__file__).parent  # swain_cli package dir
 
     def _platform_key(self) -> tuple:
         return (platform.system(), platform.machine())
@@ -334,7 +334,7 @@ ALIASES = {
 def res_gen(name: str) -> str: return ALIASES.get(name.lower(), name)
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="swaggen: generate SDKs from OpenAPI with a fully bundled engine.")
+    p = argparse.ArgumentParser(description="swain_cli: generate SDKs from OpenAPI with a fully bundled engine.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("doctor", help="Check engine status.")
@@ -453,7 +453,7 @@ def cmd_engine(args: argparse.Namespace) -> int:
 
     if args.action in ("use-system", "use-embedded"):
         mode = "system" if args.action == "use-system" else "embedded"
-        info(f"Use this with: swaggen gen ... --engine {mode}")
+        info(f"Use this with: swain_cli gen ... --engine {mode}")
         return 0
 
     return 0
@@ -479,7 +479,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "swaggen"
+name = "swain_cli"
 version = "0.1.0"
 description = "Zero-setup SDK generator from OpenAPI (bundled engine)"
 readme = "README.md"
@@ -488,10 +488,10 @@ authors = [{ name = "Your Team" }]
 dependencies = []
 
 [project.scripts]
-swaggen = "swaggen.cli:main"
+swain_cli = "swain_cli.cli:main"
 
 [tool.setuptools.package-data]
-"swaggen" = ["vendor/openapi-generator-cli-*.jar"]
+"swain_cli" = ["vendor/openapi-generator-cli-*.jar"]
 
 [tool.setuptools]
 zip-safe = false
@@ -500,11 +500,11 @@ zip-safe = false
 ### `MANIFEST.in`
 
 ```
-include swaggen/vendor/openapi-generator-cli-*.jar
+include swain_cli/vendor/openapi-generator-cli-*.jar
 ```
 
-> Place `openapi-generator-cli-7.6.0.jar` under `swaggen/vendor/` so the wheel works **offline** for the JAR.
-> The JRE is downloaded on first run, cached in `~/.cache/swaggen` (Linux), `~/Library/Caches/swaggen` (macOS), or `%LOCALAPPDATA%\swaggen` (Windows).
+> Place `openapi-generator-cli-7.6.0.jar` under `swain_cli/vendor/` so the wheel works **offline** for the JAR.
+> The JRE is downloaded on first run, cached in `~/.cache/swain_cli` (Linux), `~/Library/Caches/swain_cli` (macOS), or `%LOCALAPPDATA%\swain_cli` (Windows).
 
 ---
 
@@ -548,7 +548,7 @@ sha256sum "$OUT/${NAME}.tar.gz" > "$OUT/${NAME}.tar.gz.sha256"
 ### Publish & wire into the CLI
 
 * Upload the archives to the Release tagged `jre-21.0.4`.
-* Set `ASSET_BASE = "https://github.com/your-org/swaggen/releases/download/jre-21.0.4"`.
+* Set `ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/jre-21.0.4"`.
 * Copy each `.sha256` value into `JRE_ASSETS[(OS, ARCH)]`.
 
 ---
@@ -621,12 +621,12 @@ jobs:
       - name: Build onefile
         run: |
           python -m pip install pyinstaller
-          pyinstaller -n swaggen --onefile swaggen/cli.py \
-            --add-data "swaggen/vendor/openapi-generator-cli-7.6.0.jar:swaggen/vendor"
+          pyinstaller -n swain_cli --onefile swain_cli/cli.py \
+            --add-data "swain_cli/vendor/openapi-generator-cli-7.6.0.jar:swain_cli/vendor"
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*/swaggen*
+          files: dist/*/swain_cli*
 ```
 
 > **Note**: The JRE release job runs once per `v*.*.*` tag in this example; adapt to your versioning flow.
@@ -638,20 +638,20 @@ jobs:
 
 ```bash
 # Install (recommended)
-pipx install swaggen
+pipx install swain_cli
 
 # (optional) Pre-install the bundled JRE to avoid first-run download
-swaggen engine install-jre
+swain_cli engine install-jre
 
 # Show supported generators (from the bundled engine)
-swaggen list-generators
+swain_cli list-generators
 
 # Generate Python + TypeScript SDKs into ./sdks/*
-swaggen gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
+swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
   -p packageName=my_api_client -p packageVersion=0.1.0
 
 # Use custom generator config and templates
-swaggen gen -i ./openapi.yaml -l python -o ./sdks \
+swain_cli gen -i ./openapi.yaml -l python -o ./sdks \
   -c ./configs/python.yaml -t ./templates/python
 ```
 
@@ -683,14 +683,14 @@ useSingleRequestParameter: true
 
 ## 10) Implementation checklist
 
-* [x] Add `openapi-generator-cli-7.6.0.jar` to `swaggen/vendor/`.
+* [x] Add `openapi-generator-cli-7.6.0.jar` to `swain_cli/vendor/`.
 * [ ] Trigger the `build-jres` CI job to publish trimmed JRE assets for `jre-21.0.4` (automation committed; run on release tag to upload linux/windows bundles).
 * [x] Ensure CLI verifies JRE downloads via release `.sha256` files (no more placeholder hashes).
 * [x] Commit `pyproject.toml`, `MANIFEST.in`, `README.md`.
 * [ ] Tag `v0.1.0` and push; verify CI publishes the wheel and (optionally) binaries (tag pushed; monitor release workflow for completion).
-* [x] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; first green run: [#17884613705](https://github.com/takifouhal/swain_swaggen/actions/runs/17884613705)).
+* [x] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; first green run: [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705)).
 
-  * macOS arm64: [x] `swaggen doctor`, [x] `swaggen list-generators` (system engine via local trimmed JRE), [x] `swaggen gen -i https://petstore3.swagger.io/api/v3/openapi.json -l python -l typescript -o sdks --engine system` (outputs removed after verification)
+  * macOS arm64: [x] `swain_cli doctor`, [x] `swain_cli list-generators` (system engine via local trimmed JRE), [x] `swain_cli gen -i https://petstore3.swagger.io/api/v3/openapi.json -l python -l typescript -o sdks --engine system` (outputs removed after verification)
   * macOS x86_64: [x] Covered by CI run #17884613705
   * Linux x86_64: [x] Covered by CI run #17884613705
   * Windows x86_64: [x] Covered by CI run #17884613705
@@ -722,7 +722,7 @@ useSingleRequestParameter: true
 
 * `--offline` flag to forbid network and require cached/vendored artifacts.
 * “Presets” (org‑opinionated bundles of config + props) via `--preset <name>`.
-* `swaggen validate` wrapper for `openapi-generator validate`.
+* `swain_cli validate` wrapper for `openapi-generator validate`.
 * Telemetry (opt‑in) to count generator usage for prioritization.
 
 ---

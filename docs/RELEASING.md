@@ -1,29 +1,29 @@
-# Releasing swaggen
+# Releasing swain_cli
 
 This runbook covers the end-to-end steps for shipping a tagged release that includes updated JRE assets and PyPI artifacts.
 
 ## Quick reference
-- **Version bump locations**: `pyproject.toml`, `swaggen/__init__.py`, and anywhere else the version is surfaced to users.
-- **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swaggen/cli.py` whenever you move the downloads to a new release tag.
+- **Version bump locations**: `pyproject.toml`, `swain_cli/__init__.py`, and anywhere else the version is surfaced to users.
+- **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swain_cli/cli.py` whenever you move the downloads to a new release tag.
 - **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
 
 ## 1. Pre-release checklist
 - Confirm `main` contains the changes you intend to release and that `plan.md` or changelog notes are up to date.
 - Run the full test suite locally: `python -m pytest`.
 - Update the version number where required and commit the result (for example, `"Release v0.x.y"`).
-- If the JRE archives changed, record new SHA-256 values in `swaggen/cli.py` and verify the filenames match the release assets.
+- If the JRE archives changed, record new SHA-256 values in `swain_cli/cli.py` and verify the filenames match the release assets.
 - Smoke-test the CLI locally using both the embedded and system engines if possible:
   ```bash
-  swaggen engine install-jre
-  swaggen doctor
-  swaggen gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks
-  swaggen gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks --engine system
+  swain_cli engine install-jre
+  swain_cli doctor
+  swain_cli gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks
+  swain_cli gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks --engine system
   ```
 
 ## 2. Produce JRE archives (only when needed)
 1. Trigger the `build-jre` workflow via the GitHub Actions UI.
 2. Provide the desired Temurin version and an optional `release_tag` (`jre-<version>`). The workflow runs the platform-specific scripts in `scripts/` to build trimmed JREs.
-3. When the workflow finishes, download the `.sha256` files from the logs/artifacts and paste the sums into `swaggen/cli.py`.
+3. When the workflow finishes, download the `.sha256` files from the logs/artifacts and paste the sums into `swain_cli/cli.py`.
 4. If you skipped the optional `release_tag`, upload the produced archives and checksums manually to the appropriate GitHub release.
 
 ## 3. Tag the release
@@ -46,15 +46,15 @@ Pushing the tag triggers the `release` workflow automatically.
 ## 5. Verify the release
 1. Wait for the `release` workflow to succeed.
 2. Check the tagged GitHub Release page and confirm all JRE archives plus `.sha256` files exist.
-3. Optionally download an archive (for example `swaggen-jre-linux-x86_64.tar.gz`) and verify its checksum locally.
-4. Install the published package from PyPI in a clean environment (e.g. `pipx install swaggen`) and run a quick smoke test with `swaggen doctor` and `swaggen list-generators`.
+3. Optionally download an archive (for example `swain_cli-jre-linux-x86_64.tar.gz`) and verify its checksum locally.
+4. Install the published package from PyPI in a clean environment (e.g. `pipx install swain_cli`) and run a quick smoke test with `swain_cli doctor` and `swain_cli list-generators`.
 5. Update `plan.md` with release notes or status.
 
 ## 6. Troubleshooting
 - **Matrix failures**: Re-run the failing job from the Actions UI; Linux ARM64 uses `uraimo/run-on-arch-action` and may flake occasionally.
 - **PyPI upload issues**: Ensure `PYPI_API_TOKEN` is valid, assigned to the project, and stored as an Actions secret.
 - **Windows packaging quirks**: Download the Temurin JDK manually and execute `scripts/build-jre-windows.ps1` via PowerShell to reproduce locally.
-- **Stale caches**: If the embedded JRE changes between releases, warn users to reinstall via `swaggen engine install-jre` or remove the cache directory printed by `swaggen doctor`.
+- **Stale caches**: If the embedded JRE changes between releases, warn users to reinstall via `swain_cli engine install-jre` or remove the cache directory printed by `swain_cli doctor`.
 
 ## 7. After the release
 - Announce the release (for example in project channels or release notes).
