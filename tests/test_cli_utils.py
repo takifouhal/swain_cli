@@ -89,6 +89,12 @@ def test_cli_help_invocation():
     assert "Usage:" in result.stdout
 
 
+def test_cli_without_command_shows_help():
+    result = runner.invoke(cli.app, [])
+    assert result.exit_code == cli.EXIT_CODE_USAGE
+    assert "Commands" in result.stdout
+
+
 def test_build_generate_command_alias(tmp_path):
     args = SimpleNamespace(
         config=None,

@@ -30,7 +30,7 @@ from platformdirs import PlatformDirs
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 JRE_VERSION = "21.0.4"
-ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.0"
+ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.1"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
@@ -1176,7 +1176,7 @@ def handle_interactive(args: SimpleNamespace) -> int:
     return run_interactive(args)
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def cli_callback(
     ctx: typer.Context,
     generator_version: Optional[str] = typer.Option(
@@ -1186,6 +1186,9 @@ def cli_callback(
     ),
 ) -> None:
     ctx.obj = CLIContext(generator_version=generator_version)
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(code=EXIT_CODE_USAGE)
 
 
 @app.command()

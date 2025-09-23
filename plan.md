@@ -16,6 +16,7 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 - 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swain_cli/cli.py` with both SHA-256 values.
 - 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705).
 - 2025-09-22: Adopted Typer/httpx/questionary/platformdirs/keyring/pooch across the CLI, refreshed docs/tests, and confirmed `swain_cli doctor` works post-migration.
+- 2025-09-23: Patched CLI to show help when no command is provided and prepped v0.2.1 release.
 
 
 ---
@@ -481,7 +482,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swain_cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Zero-setup SDK generator from OpenAPI (bundled engine)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -649,7 +650,7 @@ swain_cli list-generators
 
 # Generate Python + TypeScript SDKs into ./sdks/*
 swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
-  -p packageName=my_api_client -p packageVersion=0.2.0
+  -p packageName=my_api_client -p packageVersion=0.2.1
 
 # Use custom generator config and templates
 swain_cli gen -i ./openapi.yaml -l python -o ./sdks \
@@ -665,7 +666,7 @@ swain_cli gen -i ./openapi.yaml -l python -o ./sdks \
 ```yaml
 packageName: my_api_client
 projectName: my_api_client
-packageVersion: 0.2.0
+packageVersion: 0.2.1
 generateSourceCodeOnly: true
 enumPropertyNaming: PascalCase
 ```
@@ -674,7 +675,7 @@ enumPropertyNaming: PascalCase
 
 ```yaml
 npmName: "@acme/api-client"
-npmVersion: 0.2.0
+npmVersion: 0.2.1
 supportsES6: true
 withInterfaces: true
 useSingleRequestParameter: true
@@ -688,7 +689,7 @@ useSingleRequestParameter: true
 * [ ] Trigger the `build-jres` CI job to publish trimmed JRE assets for `jre-21.0.4` (automation committed; run on release tag to upload linux/windows bundles).
 * [x] Ensure CLI verifies JRE downloads via release `.sha256` files (no more placeholder hashes).
 * [x] Commit `pyproject.toml`, `MANIFEST.in`, `README.md`.
-* [ ] Tag `v0.2.0` and push; verify CI publishes the wheel and (optionally) binaries (tag pushed; monitor release workflow for completion).
+* [ ] Tag `v0.2.1` and push; verify CI publishes the wheel and (optionally) binaries (tag pushed; monitor release workflow for completion).
 * [x] Test on Linux x64, macOS (Intel + ARM), Windows x64 (covered by `ci.yml`; first green run: [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705)).
 
   * macOS arm64: [x] `swain_cli doctor`, [x] `swain_cli list-generators` (system engine via local trimmed JRE), [x] `swain_cli gen -i https://petstore3.swagger.io/api/v3/openapi.json -l python -l typescript -o sdks --engine system` (outputs removed after verification)
