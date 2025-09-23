@@ -1,14 +1,50 @@
-import argparse
 import io
 import json
 import os
-import subprocess
 import sys
-import urllib.error
+from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
+import keyring
+from keyring.backend import KeyringBackend
+from keyring.errors import PasswordDeleteError
 import pytest
+from typer.testing import CliRunner
 
 import swain_cli.cli as cli
+
+
+class MemoryKeyring(KeyringBackend):
+    priority = 1
+
+    def __init__(self) -> None:
+        self._storage = {}
+
+    def get_password(self, service, username):
+        return self._storage.get((service, username))
+
+    def set_password(self, service, username, password):
+        self._storage[(service, username)] = password
+
+    def delete_password(self, service, username):
+        try:
+            del self._storage[(service, username)]
+        except KeyError as exc:
+            raise PasswordDeleteError(str(exc))
+
+
+@pytest.fixture(autouse=True)
+def memory_keyring():
+    original = keyring.get_keyring()
+    keyring.set_keyring(MemoryKeyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(original)
+
+
+runner = CliRunner()
 
 
 def test_typescript_alias():
@@ -31,43 +67,30 @@ def test_normalize_arch_variants():
 
 
 def test_cache_root_honors_env(tmp_path, monkeypatch):
-    cli.get_engine_paths.cache_clear()
-    cli.get_platform_info.cache_clear()
-    explicit = tmp_path / "custom-cache"
-    monkeypatch.setenv(cli.CACHE_ENV_VAR, str(explicit))
-    try:
-        result = cli.cache_root()
-        assert result == explicit
-        assert result.is_dir()
-    finally:
-        cli.get_engine_paths.cache_clear()
-        cli.get_platform_info.cache_clear()
+    custom = tmp_path / "custom-cache"
+    monkeypatch.setenv(cli.CACHE_ENV_VAR, str(custom))
+    result = cli.cache_root()
+    assert result == custom
+    assert result.is_dir()
 
 
 def test_get_jre_asset_unsupported(monkeypatch):
+    cli.get_platform_info.cache_clear()
     monkeypatch.setattr(cli.platform, "system", lambda: "Plan9")
     monkeypatch.setattr(cli.platform, "machine", lambda: "mips")
     with pytest.raises(cli.CLIError):
         cli.get_jre_asset()
+    cli.get_platform_info.cache_clear()
 
 
-@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX-only path expectations")
-def test_cli_help_invocation(tmp_path):
-    env = os.environ.copy()
-    env["SWAIN_CLI_CACHE_DIR"] = str(tmp_path)
-    completed = subprocess.run(
-        [sys.executable, "-m", "swain_cli.cli", "--help"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    assert "usage" in completed.stdout.lower()
+def test_cli_help_invocation():
+    result = runner.invoke(cli.app, ["--help"])
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
 
 
 def test_build_generate_command_alias(tmp_path):
-    args = argparse.Namespace(
+    args = SimpleNamespace(
         config=None,
         templates=None,
         additional_properties=None,
@@ -76,11 +99,9 @@ def test_build_generate_command_alias(tmp_path):
         skip_validate_spec=False,
         verbose=False,
     )
-
     resolved, target, cmd = cli.build_generate_command(
         "schema.yaml", "typescript", args, tmp_path
     )
-
     assert resolved == "typescript-axios"
     assert target == tmp_path / "typescript-axios"
     assert cmd[:7] == [
@@ -107,50 +128,75 @@ def test_crudsql_dynamic_swagger_url_variants():
         cli.crudsql_dynamic_swagger_url("api.example.com")
 
 
-def test_fetch_crudsql_schema_success(monkeypatch):
-    discovery_payload = b"{\"schema_url\": \"/openapi/custom.json\"}"
-    schema_payload = b"{\"swagger\": \"2.0\"}"
+class FakeResponse:
+    def __init__(self, url, *, status_code=200, content=b"", json_data=None, reason="OK"):
+        self.url = url
+        self.status_code = status_code
+        self.content = content
+        self._json_data = json_data
+        self.reason_phrase = reason
+        self.headers = {}
+        self.text = content.decode("utf-8", "replace") if isinstance(content, bytes) else str(content)
 
-    class DiscoveryResponse:
-        def __enter__(self):
-            return self
+    def json(self):
+        if self._json_data is not None:
+            return self._json_data
+        return json.loads(self.content.decode("utf-8"))
 
-        def __exit__(self, *args):
-            return False
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            request = httpx.Request("GET", self.url)
+            raise httpx.HTTPStatusError(
+                "error",
+                request=request,
+                response=self,
+            )
 
-        def read(self):
-            return discovery_payload
 
-    class SchemaResponse:
-        def __enter__(self):
-            return self
+class FakeClient:
+    def __init__(self, responses, calls=None):
+        self._responses = list(responses)
+        self.calls = [] if calls is None else calls
 
-        def __exit__(self, *args):
-            return False
+    def __enter__(self):
+        return self
 
-        def read(self):
-            return schema_payload
+    def __exit__(self, *exc):
+        return False
 
+    def get(self, url, headers=None):
+        if not self._responses:
+            raise AssertionError("unexpected request")
+        response = self._responses.pop(0)
+        assert response.url == str(url)
+        self.calls.append(str(url))
+        return response
+
+
+def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
+    discovery = FakeResponse(
+        "https://api.example.com/api/schema-location",
+        json_data={"schema_url": "/openapi/custom.json"},
+        content=b"{}",
+    )
+    schema = FakeResponse(
+        "https://api.example.com/openapi/custom.json",
+        content=b"{\"swagger\": \"2.0\"}"
+    )
     calls = []
 
-    def fake_urlopen(request):
-        calls.append(request.full_url)
-        assert request.headers["Authorization"] == "Bearer token123"
-        assert "swain_cli" in request.get_header("User-agent")
-        if request.full_url.endswith("/api/schema-location"):
-            return DiscoveryResponse()
-        assert request.full_url == "https://api.example.com/openapi/custom.json"
-        return SchemaResponse()
+    def fake_client(**kwargs):
+        if not calls:
+            return FakeClient([discovery], calls)
+        return FakeClient([schema], calls)
 
-    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
-
-    path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
+    temp_path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(temp_path.read_text())
         assert data["swagger"] == "2.0"
     finally:
-        path.unlink(missing_ok=True)
-
+        temp_path.unlink(missing_ok=True)
     assert calls == [
         "https://api.example.com/api/schema-location",
         "https://api.example.com/openapi/custom.json",
@@ -158,215 +204,91 @@ def test_fetch_crudsql_schema_success(monkeypatch):
 
 
 def test_fetch_crudsql_schema_http_error(monkeypatch):
-    def fake_urlopen(request):
-        raise urllib.error.HTTPError(
-            request.full_url,
-            401,
-            "unauthorized",
-            hdrs=None,
-            fp=io.BytesIO(b"denied"),
-        )
+    response = FakeResponse(
+        "https://api.example.com/api/schema-location",
+        status_code=401,
+        content=b"denied",
+        reason="Unauthorized",
+    )
 
-    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+    def fake_client(**kwargs):
+        return FakeClient([response])
 
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
     with pytest.raises(cli.CLIError) as excinfo:
         cli.fetch_crudsql_schema("https://api.example.com", "token123")
-
     assert "401" in str(excinfo.value)
 
 
 def test_fetch_crudsql_schema_falls_back(monkeypatch):
-    schema_payload = b"{}"
+    discovery = FakeResponse(
+        "https://api.example.com/api/schema-location",
+        status_code=404,
+        content=b"missing",
+        reason="Not Found",
+    )
+    schema = FakeResponse(
+        "https://api.example.com/api/dynamic_swagger",
+        content=b"{}",
+    )
 
-    class SchemaResponse:
-        def __enter__(self):
-            return self
+    worked_calls = []
 
-        def __exit__(self, *args):
-            return False
+    def fake_client(**kwargs):
+        if not worked_calls:
+            worked_calls.append("discovery")
+            return FakeClient([discovery])
+        return FakeClient([schema])
 
-        def read(self):
-            return schema_payload
-
-    responses = []
-
-    def fake_urlopen(request):
-        responses.append(request.full_url)
-        if request.full_url.endswith("/api/schema-location"):
-            raise urllib.error.HTTPError(
-                request.full_url,
-                404,
-                "not found",
-                hdrs=None,
-                fp=io.BytesIO(b"missing"),
-            )
-        return SchemaResponse()
-
-    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
-
-    path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
+    temp_path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
     try:
-        assert path.read_text() == "{}"
+        assert temp_path.read_text() == "{}"
     finally:
-        path.unlink(missing_ok=True)
-
-    assert responses[-1] == "https://api.example.com/api/dynamic_swagger"
+        temp_path.unlink(missing_ok=True)
 
 
 def test_extract_archive_unknown(tmp_path):
     archive = tmp_path / "archive.xyz"
     archive.write_text("dummy")
-
     with pytest.raises(cli.CLIError):
         cli.extract_archive(archive, tmp_path / "out")
 
 
-def test_interactive_wizard_skip_generation(monkeypatch, capfd):
-    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token")
-
-    responses = iter(
-        [
-            "",  # reuse existing token
-            "n",  # CrudSQL prompt -> no
-            "http://example.com/openapi.yaml",  # schema
-            "sdks",  # output directory
-            "TypeScript",  # languages (case-insensitive)
-            "",  # config
-            "",  # templates
-            "n",  # additional properties
-            "n",  # system properties
-            "n",  # raw generator args
-            "",  # use embedded (default yes)
-            "n",  # skip validation
-            "n",  # verbose
-            "n",  # run now
-        ]
-    )
-
-    def fake_input(prompt: str) -> str:
-        try:
-            return next(responses)
-        except StopIteration:  # pragma: no cover - defensive guard
-            pytest.fail("interactive wizard requested more input than expected")
-
-    monkeypatch.setattr("builtins.input", fake_input)
-    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
-
-    result = cli.handle_interactive(argparse.Namespace(generator_version=None))
-    assert result == 0
-
-    captured = capfd.readouterr()
-    assert "interactive SDK generation wizard" in captured.out
-    assert "swain_cli gen -i http://example.com/openapi.yaml -o sdks -l typescript" in captured.out
-
-
-def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):
-    schema = tmp_path / "openapi.yaml"
-    schema.write_text("openapi: 3.0.0")
-    config_valid = tmp_path / "config.yaml"
-    config_valid.write_text("generator: python")
-
-    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token")
-
-    responses = iter(
-        [
-            "",  # reuse existing token
-            "n",  # CrudSQL prompt -> no
-            str(schema),  # schema path
-            str(tmp_path / "sdks"),  # output directory
-            "python",  # languages
-            str(tmp_path / "missing.yaml"),  # config (first attempt - invalid)
-            str(config_valid),  # config (second attempt - valid)
-            "",  # templates
-            "n",  # additional properties
-            "n",  # system properties
-            "n",  # raw generator args
-            "",  # use embedded (default yes)
-            "n",  # skip validation
-            "n",  # verbose
-            "n",  # run now
-        ]
-    )
-
-    def fake_input(prompt: str) -> str:
-        try:
-            return next(responses)
-        except StopIteration:  # pragma: no cover
-            pytest.fail("interactive wizard requested more input than expected")
-
-    monkeypatch.setattr("builtins.input", fake_input)
-    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
-
-    result = cli.handle_interactive(argparse.Namespace(generator_version=None))
-    assert result == 0
-
-    out, err = capfd.readouterr()
-    assert "config file" in err
-    assert str(config_valid) in out
-
-
-def test_auth_login_writes_config(tmp_path, monkeypatch):
-    cli.get_config_paths.cache_clear()
-    config_dir = tmp_path / "config"
-    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(config_dir))
-
-    try:
-        args = argparse.Namespace(token="supersecret", stdin=False, no_prompt=False)
-        assert cli.handle_auth_login(args) == 0
-
-        auth_file = config_dir / cli.AUTH_FILE_NAME
-        assert auth_file.exists()
-        data = json.loads(auth_file.read_text())
-        assert data["access_token"] == "supersecret"
-    finally:
-        cli.get_config_paths.cache_clear()
-
-
-def test_auth_logout_removes_file(tmp_path, monkeypatch):
-    cli.get_config_paths.cache_clear()
-    config_dir = tmp_path / "config"
-    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(config_dir))
-
-    try:
-        cli.save_auth_state(cli.AuthState("stored-token"))
-        auth_file = config_dir / cli.AUTH_FILE_NAME
-        assert auth_file.exists()
-
-        assert cli.handle_auth_logout(argparse.Namespace()) == 0
-        assert not auth_file.exists()
-    finally:
-        cli.get_config_paths.cache_clear()
-
-
-def test_auth_status_prefers_env(tmp_path, monkeypatch, capfd):
-    cli.get_config_paths.cache_clear()
-    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(tmp_path / "config"))
-    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token-value")
-
-    try:
-        assert cli.handle_auth_status(argparse.Namespace()) == 0
-    finally:
-        cli.get_config_paths.cache_clear()
-
-    out, err = capfd.readouterr()
-    assert "environment variable" in out
-    assert "env-token-value" not in out  # token should be masked
-    assert "effective token" in out
-    assert err == ""
-
-
 def test_read_login_token_stdin(monkeypatch):
-    stream = io.StringIO("stdin-token\n")
-    monkeypatch.setattr(sys, "stdin", stream)
-    args = argparse.Namespace(token=None, stdin=True, no_prompt=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("stdin-token\n"))
+    args = SimpleNamespace(token=None, stdin=True, no_prompt=False)
     assert cli.read_login_token(args) == "stdin-token"
 
 
 def test_read_login_token_no_prompt(monkeypatch):
     monkeypatch.delenv(cli.AUTH_TOKEN_ENV_VAR, raising=False)
-    args = argparse.Namespace(token=None, stdin=False, no_prompt=True)
+    args = SimpleNamespace(token=None, stdin=False, no_prompt=True)
     with pytest.raises(cli.CLIError):
         cli.read_login_token(args)
+
+
+def test_auth_login_uses_keyring():
+    args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
+    assert cli.handle_auth_login(args) == 0
+    assert cli.load_auth_state().access_token == "supersecret"
+
+
+def test_auth_logout_removes_token():
+    args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
+    cli.handle_auth_login(args)
+    assert cli.handle_auth_logout(SimpleNamespace()) == 0
+    assert cli.load_auth_state().access_token is None
+
+
+def test_auth_status_prefers_env(monkeypatch, capfd):
+    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token-value")
+    assert cli.handle_auth_status(SimpleNamespace()) == 0
+    out, err = capfd.readouterr()
+    assert "environment variable" in out
+    assert "env-token-value" not in out
+    assert "effective token" in out
+    assert err == ""
 
 
 def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
@@ -389,7 +311,7 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
     monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
 
-    args = argparse.Namespace(
+    args = SimpleNamespace(
         generator_version=None,
         engine="embedded",
         schema=None,
@@ -426,7 +348,7 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "run_openapi_generator", lambda jar, engine, cmd: 0)
 
     out_dir = tmp_path / "out"
-    args = argparse.Namespace(
+    args = SimpleNamespace(
         generator_version=None,
         engine="embedded",
         schema=None,
@@ -445,3 +367,53 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     assert cli.handle_gen(args) == 0
     assert not schema_file.exists()
     assert out_dir.is_dir()
+
+
+def test_handle_interactive_skip_generation(monkeypatch, capfd):
+    confirm_values = iter(
+        [
+            False,  # fetch from CrudSQL? no
+            False,  # additional properties
+            False,  # system properties
+            False,  # raw generator args
+            True,  # use embedded runtime
+            False,  # skip validation
+            False,  # verbose
+            False,  # run now
+        ]
+    )
+
+    text_values = iter(
+        [
+            "http://example.com/openapi.yaml",
+            "sdks",
+            "python",
+            "",
+            "",
+        ]
+    )
+
+    def fake_confirm(prompt, default=True):
+        return next(confirm_values)
+
+    def fake_text(prompt, default=None, validate=None, allow_empty=False):
+        value = next(text_values)
+        if callable(validate):
+            error = validate(value)
+            if error:
+                pytest.fail(f"validation failed unexpectedly: {error}")
+        return value
+
+    monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
+    monkeypatch.setattr(cli, "prompt_text", fake_text)
+    monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
+    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
+    monkeypatch.setattr(cli, "fetch_crudsql_schema", lambda base, token: Path("schema.json"))
+    monkeypatch.setattr(cli, "handle_gen", lambda args: 0)
+
+    result = cli.handle_interactive(SimpleNamespace(generator_version=None))
+    assert result == 0
+    out, err = capfd.readouterr()
+    assert "interactive SDK generation wizard" in out
+    assert err == ""

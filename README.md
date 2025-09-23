@@ -6,7 +6,7 @@
 - Generate SDKs for multiple target languages with one command
 - Pinned OpenAPI Generator `7.6.0` for consistent output across machines
 - Embedded OpenJDK 21 runtime download on first use (or opt into system Java)
-- Zero runtime Python dependencies, ideal for `pipx`, CI, and ephemeral environments
+- Light Python dependency stack (Typer, httpx, questionary, platformdirs, keyring, pooch) that stays friendly for `pipx`, CI, and ephemeral environments
 - Helper commands to inspect and manage the embedded engine assets
 
 ## Install
@@ -31,7 +31,7 @@ swain_cli list-generators
 
 # Generate Python and TypeScript clients into ./sdks/<generator>
 swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
-  -p packageName=my_api_client -p packageVersion=0.1.0
+  -p packageName=my_api_client -p packageVersion=0.2.0
 ```
 
 `swain_cli` streams OpenAPI Generator output directly, so you see progress as the SDK is generated.
@@ -49,10 +49,10 @@ Run `swain_cli --help` or `swain_cli <command> --help` for complete usage.
 ## Authentication
 Use the `auth` subcommands to prime swain_cli with credentials for the hosted platform you will be integrating with.
 
-- `swain_cli auth login`: Supply an access token via `--token <value>`, pipe it with `--stdin`, or let swain_cli prompt securely. The token is written to a per-user config file (`auth.json`) with user-only permissions where the OS supports it.
+- `swain_cli auth login`: Supply an access token via `--token <value>`, pipe it with `--stdin`, or let swain_cli prompt securely. The token is stored in the system keyring (or use `SWAIN_CLI_AUTH_TOKEN` for ephemeral sessions).
 - `swain_cli auth status`: Inspect the currently active token source and see where swain_cli will read credentials from.
 - `swain_cli auth logout`: Delete the stored token if you need to rotate or clear credentials.
-- Override the configuration root with `SWAIN_CLI_CONFIG_DIR=/custom/path`. The default lives under the platform’s standard config directory (for example `~/Library/Application Support/swain_cli`).
+- Tokens live in the system keyring; use `SWAIN_CLI_AUTH_TOKEN` for ephemeral sessions or automation.
 - The `swain_cli interactive` wizard begins by checking for an access token and will prompt you to add or replace one before continuing if none is available.
 
 ```
@@ -67,18 +67,17 @@ Use the `auth` subcommands to prime swain_cli with credentials for the hosted pl
                +--------------------------+---------------------------+
                                           |
                                           v
-                               +--------------------+
-                               | write auth.json    |
-                               | (user config dir)  |
-                               +----------+---------+
+                               +------------------------------+
+                               | store credential in keyring  |
+                               +----------+-------------------+
                                           |
                                 resolve_auth_token()
                                           |
                            +--------------+--------------+
                            |                             |
-             SWAIN_CLI_AUTH_TOKEN set?          stored token available?
+             SWAIN_CLI_AUTH_TOKEN set?          keyring credential?
                            |                             |
-                    use env token          use masked value from auth.json
+                    use env token          use masked value from keyring
                            |                             |
                            +--------------+--------------+
                                           |

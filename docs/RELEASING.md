@@ -10,6 +10,7 @@ This runbook covers the end-to-end steps for shipping a tagged release that incl
 ## 1. Pre-release checklist
 - Confirm `main` contains the changes you intend to release and that `plan.md` or changelog notes are up to date.
 - Run the full test suite locally: `python -m pytest`.
+- Verify the runtime dependency list in `pyproject.toml` matches the CLI implementation (Typer/httpx/questionary/platformdirs/keyring/pooch) and update release notes accordingly.
 - Update the version number where required and commit the result (for example, `"Release v0.x.y"`).
 - If the JRE archives changed, record new SHA-256 values in `swain_cli/cli.py` and verify the filenames match the release assets.
 - Smoke-test the CLI locally using both the embedded and system engines if possible:
