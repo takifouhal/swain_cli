@@ -37,7 +37,7 @@ swaggen gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 `swaggen` streams OpenAPI Generator output directly, so you see progress as the SDK is generated.
 
 ## Command overview
-- `swaggen gen` — generate one or more SDKs; accepts the same configuration flags as OpenAPI Generator (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options
+- `swaggen gen` — generate one or more SDKs; accepts the same configuration flags as OpenAPI Generator (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options. By default swaggen pulls the CrudSQL dynamic swagger from `https://api.swain.technology`; override with `--crudsql-url` or provide `-i/--schema` to use a local file/URL instead.
 - `swaggen interactive` — answer a short Q&A and swaggen assembles (and optionally runs) the matching `swaggen gen` command
 - `swaggen list-generators` — enumerate supported generators; add `--engine system` to check a local Java installation
 - `swaggen doctor` — print environment details, cache paths, installed JREs, and whether the vendor JAR is available
@@ -90,6 +90,11 @@ Use the `auth` subcommands to prime swaggen with credentials for the hosted plat
 ```
 
 `SWAGGEN_AUTH_TOKEN` always takes precedence over anything written to disk, which is useful for one-off runs in CI. Pair `swaggen auth status` with `SWAGGEN_CONFIG_DIR` to verify exactly which file swaggen will read when the CLI gains authenticated commands.
+
+### CrudSQL integration
+- `swaggen gen` (with no schema flag) automatically downloads the CrudSQL server's `GET /api/dynamic_swagger` document from `https://api.swain.technology` using the stored token as a `Bearer` credential before running OpenAPI Generator.
+- Override the source with `--crudsql-url https://api.example.com` or bypass CrudSQL entirely by supplying `-i/--schema`.
+- The retrieved schema is cached to a temp file for the duration of the command and removed afterwards.
 
 ## Generating clients effectively
 - **Multiple targets**: Pass `-l`/`--lang` repeatedly (`swaggen gen ... -l python -l typescript`) and each generator gets its own subfolder beneath the output directory.

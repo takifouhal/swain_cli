@@ -17,6 +17,7 @@ import tempfile
 import textwrap
 from getpass import getpass
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
@@ -39,6 +40,7 @@ CONFIG_ENV_VAR = "SWAGGEN_CONFIG_DIR"
 AUTH_TOKEN_ENV_VAR = "SWAGGEN_AUTH_TOKEN"
 AUTH_FILE_NAME = "auth.json"
 DEFAULT_CONFIG_DIR_NAME = "swaggen"
+DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
 
 COMMON_LANGUAGES = [
     "python",
@@ -370,6 +372,66 @@ def require_auth_token(purpose: str = "perform this action") -> str:
             f"authentication token required to {purpose}; run 'swaggen auth login'"
         )
     return token
+
+
+def crudsql_dynamic_swagger_url(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise CLIError(
+            f"invalid CrudSQL base URL '{base_url}'; include scheme and host (e.g. https://api.example.com)"
+        )
+
+    normalized_base = base_url.rstrip("/") + "/"
+    return urllib.parse.urljoin(normalized_base, "api/dynamic_swagger")
+
+
+def fetch_crudsql_schema(base_url: str, token: str) -> Path:
+    url = crudsql_dynamic_swagger_url(base_url)
+    log(f"fetching CrudSQL dynamic swagger from {url}")
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": f"swaggen/{PINNED_GENERATOR_VERSION}",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urllib.request.Request(url, headers=headers)
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            payload = response.read()
+    except urllib.error.HTTPError as exc:
+        detail = f"{exc.code} {exc.reason}".strip()
+        body = ""
+        try:
+            body_bytes = exc.read()
+            if body_bytes:
+                body = body_bytes.decode("utf-8", "replace").strip()
+        except Exception:  # pragma: no cover - defensive best effort
+            body = ""
+        if body:
+            first_line = body.splitlines()[0]
+            detail = f"{detail}: {first_line}" if detail else first_line
+        raise CLIError(
+            f"failed to fetch CrudSQL schema from {url}: {detail}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise CLIError(f"failed to reach CrudSQL backend at {url}: {exc}") from exc
+
+    if not payload or not payload.strip():
+        raise CLIError("CrudSQL dynamic swagger response was empty")
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", delete=False, suffix=".json"
+        ) as handle:
+            handle.write(payload)
+            temp_path = Path(handle.name)
+    except OSError as exc:
+        raise CLIError(f"failed to persist CrudSQL schema locally: {exc}") from exc
+
+    return temp_path
 
 
 def get_jre_asset() -> JREAsset:
@@ -809,28 +871,46 @@ def handle_gen(args: argparse.Namespace) -> int:
     jar = resolve_generator_jar(args.generator_version)
     engine = args.engine
 
-    schema = args.schema
-    if not is_url(schema):
-        schema_path = Path(schema)
-        if not schema_path.exists():
-            raise CLIError(f"schema not found: {schema_path}")
-        schema = str(schema_path)
+    schema_arg = getattr(args, "schema", None)
+    crudsql_url = getattr(args, "crudsql_url", None)
+    temp_schema: Optional[Path] = None
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if schema_arg:
+            schema = schema_arg
+            if not is_url(schema):
+                schema_path = Path(schema)
+                if not schema_path.exists():
+                    raise CLIError(f"schema not found: {schema_path}")
+                schema = str(schema_path)
+        else:
+            base_url = (crudsql_url or "").strip() or DEFAULT_CRUDSQL_BASE_URL
+            token = require_auth_token("fetch the CrudSQL swagger document")
+            temp_schema = fetch_crudsql_schema(base_url, token)
+            schema = str(temp_schema)
 
-    languages = args.languages
-    if not languages:
-        raise CLIError("at least one --lang is required")
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    for lang in languages:
-        resolved_lang, target_dir, cmd = build_generate_command(schema, lang, args, out_dir)
+        languages = args.languages
+        if not languages:
+            raise CLIError("at least one --lang is required")
 
-        log(f"generating {resolved_lang} into {target_dir}")
-        rc = run_openapi_generator(jar, engine, cmd)
-        if rc != 0:
-            log_error(f"generation failed for {resolved_lang} (exit code {rc})")
-            return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+        for lang in languages:
+            resolved_lang, target_dir, cmd = build_generate_command(
+                schema, lang, args, out_dir
+            )
+
+            log(f"generating {resolved_lang} into {target_dir}")
+            rc = run_openapi_generator(jar, engine, cmd)
+            if rc != 0:
+                log_error(
+                    f"generation failed for {resolved_lang} (exit code {rc})"
+                )
+                return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+    finally:
+        if temp_schema:
+            temp_schema.unlink(missing_ok=True)
 
     return 0
 
@@ -999,12 +1079,29 @@ def handle_interactive(args: argparse.Namespace) -> int:
             return f"schema not found at {path}"
         return None
 
+    schema_input: Optional[str] = None
+    crudsql_base: Optional[str] = None
+
     try:
-        schema_input = prompt_loop(
-            "Schema path or URL",
-            default=str(schema_default) if schema_default else None,
-            validator=validate_schema,
-        )
+        if prompt_yes_no("Fetch schema from a CrudSQL backend?", default=True):
+            def validate_crudsql_base(value: str) -> Optional[str]:
+                try:
+                    crudsql_dynamic_swagger_url(value)
+                except CLIError as exc:
+                    return str(exc)
+                return None
+
+            crudsql_base = prompt_loop(
+                "CrudSQL base URL",
+                default=DEFAULT_CRUDSQL_BASE_URL,
+                validator=validate_crudsql_base,
+            )
+        else:
+            schema_input = prompt_loop(
+                "Schema path or URL",
+                default=str(schema_default) if schema_default else None,
+                validator=validate_schema,
+            )
 
         out_default = "sdks"
 
@@ -1128,15 +1225,27 @@ def handle_interactive(args: argparse.Namespace) -> int:
         log_error("interactive session cancelled")
         return EXIT_CODE_INTERRUPT
 
-    schema_value = (
-        schema_input
-        if is_url(schema_input)
-        else str(Path(schema_input).expanduser())
-    )
+    if crudsql_base:
+        base_to_use = crudsql_base or DEFAULT_CRUDSQL_BASE_URL
+        schema_value = crudsql_dynamic_swagger_url(base_to_use)
+        schema_display = schema_value
+    else:
+        if schema_input is None:  # pragma: no cover - defensive guard
+            raise CLIError("schema path or URL not provided")
+        schema_value = (
+            schema_input
+            if is_url(schema_input)
+            else str(Path(schema_input).expanduser())
+        )
+        schema_display = schema_value
     out_value = str(Path(out_dir_input).expanduser())
 
     log("configuration preview")
-    log(f"  schema: {schema_value}")
+    if crudsql_base:
+        log(f"  crudsql base: {crudsql_base}")
+        log(f"  dynamic swagger: {schema_display}")
+    else:
+        log(f"  schema: {schema_display}")
     log(f"  output: {out_value}")
     log(f"  languages: {', '.join(languages)}")
     if config_value:
@@ -1156,7 +1265,13 @@ def handle_interactive(args: argparse.Namespace) -> int:
     command_preview: List[str] = ["swaggen"]
     if args.generator_version:
         command_preview.extend(["--generator-version", args.generator_version])
-    command_preview.extend(["gen", "-i", schema_value, "-o", out_value])
+    command_preview.append("gen")
+    if crudsql_base:
+        if crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
+            command_preview.extend(["--crudsql-url", crudsql_base])
+    else:
+        command_preview.extend(["-i", schema_value])
+    command_preview.extend(["-o", out_value])
     for lang in languages:
         command_preview.extend(["-l", lang])
     if config_value:
@@ -1254,7 +1369,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser_gen = subparsers.add_parser(
         "gen", help="generate SDKs using OpenAPI Generator"
     )
-    parser_gen.add_argument("-i", "--schema", required=True, help="schema path or URL")
+    schema_group = parser_gen.add_mutually_exclusive_group()
+    schema_group.add_argument(
+        "-i", "--schema", help="schema path or URL"
+    )
+    schema_group.add_argument(
+        "--crudsql-url",
+        help=(
+            "CrudSQL base URL to pull dynamic swagger (default: "
+            f"{DEFAULT_CRUDSQL_BASE_URL})"
+        ),
+    )
     parser_gen.add_argument(
         "-l",
         "--lang",

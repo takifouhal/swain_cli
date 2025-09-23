@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 
 import pytest
 
@@ -93,6 +94,66 @@ def test_build_generate_command_alias(tmp_path):
     ]
 
 
+def test_crudsql_dynamic_swagger_url_variants():
+    assert (
+        cli.crudsql_dynamic_swagger_url("https://api.example.com")
+        == "https://api.example.com/api/dynamic_swagger"
+    )
+    assert (
+        cli.crudsql_dynamic_swagger_url("https://api.example.com/base")
+        == "https://api.example.com/base/api/dynamic_swagger"
+    )
+    with pytest.raises(cli.CLIError):
+        cli.crudsql_dynamic_swagger_url("api.example.com")
+
+
+def test_fetch_crudsql_schema_success(monkeypatch):
+    payload = b"{\"swagger\": \"2.0\"}"
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return payload
+
+    def fake_urlopen(request):
+        assert request.full_url == "https://api.example.com/api/dynamic_swagger"
+        assert request.headers["Authorization"] == "Bearer token123"
+        assert "swaggen" in request.get_header("User-agent")
+        return DummyResponse()
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+
+    path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    try:
+        data = json.loads(path.read_text())
+        assert data["swagger"] == "2.0"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_fetch_crudsql_schema_http_error(monkeypatch):
+    def fake_urlopen(request):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "unauthorized",
+            hdrs=None,
+            fp=io.BytesIO(b"denied"),
+        )
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(cli.CLIError) as excinfo:
+        cli.fetch_crudsql_schema("https://api.example.com", "token123")
+
+    assert "401" in str(excinfo.value)
+
+
 def test_extract_archive_unknown(tmp_path):
     archive = tmp_path / "archive.xyz"
     archive.write_text("dummy")
@@ -107,6 +168,7 @@ def test_interactive_wizard_skip_generation(monkeypatch, capfd):
     responses = iter(
         [
             "",  # reuse existing token
+            "n",  # CrudSQL prompt -> no
             "http://example.com/openapi.yaml",  # schema
             "sdks",  # output directory
             "TypeScript",  # languages (case-insensitive)
@@ -150,6 +212,7 @@ def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):
     responses = iter(
         [
             "",  # reuse existing token
+            "n",  # CrudSQL prompt -> no
             str(schema),  # schema path
             str(tmp_path / "sdks"),  # output directory
             "python",  # languages
@@ -245,3 +308,81 @@ def test_read_login_token_no_prompt(monkeypatch):
     args = argparse.Namespace(token=None, stdin=False, no_prompt=True)
     with pytest.raises(cli.CLIError):
         cli.read_login_token(args)
+
+
+def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+
+    def fake_fetch(url, token):
+        assert url == "https://api.example.com"
+        assert token == "token-abc"
+        schema_file.write_text("{}")
+        return schema_file
+
+    captured = {}
+
+    def fake_run(jar, engine, cmd):
+        captured["cmd"] = cmd
+        return 0
+
+    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-abc")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+
+    args = argparse.Namespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url="https://api.example.com",
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert "cmd" in captured
+    assert not schema_file.exists()
+    assert os.path.isdir(args.out)
+
+
+def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+
+    def fake_fetch(url, token):
+        assert url == cli.DEFAULT_CRUDSQL_BASE_URL
+        assert token == "token-default"
+        schema_file.write_text("{}")
+        return schema_file
+
+    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-default")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(cli, "run_openapi_generator", lambda jar, engine, cmd: 0)
+
+    out_dir = tmp_path / "out"
+    args = argparse.Namespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url=None,
+        out=str(out_dir),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert not schema_file.exists()
+    assert out_dir.is_dir()
