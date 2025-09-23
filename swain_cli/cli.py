@@ -30,12 +30,13 @@ from platformdirs import PlatformDirs
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 JRE_VERSION = "21.0.4"
-ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.1"
+ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.2"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
 KEYRING_SERVICE = "swain_cli"
 KEYRING_USERNAME = "access_token"
+KEYRING_REFRESH_USERNAME = "refresh_token"
 DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
@@ -120,6 +121,7 @@ class EngineSnapshot:
 @dataclass
 class AuthState:
     access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
 
 
 @dataclass
@@ -267,21 +269,35 @@ def find_vendor_jar() -> Optional[Path]:
 def load_auth_state() -> AuthState:
     env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
     if env_token:
-        return AuthState(env_token)
+        return AuthState(env_token, None)
 
     try:
         token = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        refresh = keyring.get_password(KEYRING_SERVICE, KEYRING_REFRESH_USERNAME)
     except NoKeyringError:
         token = None
-    return AuthState(token.strip() if token else None)
+        refresh = None
+    access_value = token.strip() if token else None
+    refresh_value = refresh.strip() if refresh else None
+    return AuthState(access_value, refresh_value)
 
 
-def persist_auth_token(token: str) -> None:
+def persist_auth_token(token: str, refresh_token: Optional[str] = None) -> None:
     normalized = token.strip()
     if not normalized:
         raise CLIError("attempted to persist empty auth token")
     try:
         keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, normalized)
+        if refresh_token is not None:
+            refresh_normalized = refresh_token.strip()
+            if refresh_normalized:
+                keyring.set_password(
+                    KEYRING_SERVICE, KEYRING_REFRESH_USERNAME, refresh_normalized
+                )
+            else:
+                keyring.delete_password(
+                    KEYRING_SERVICE, KEYRING_REFRESH_USERNAME
+                )
     except NoKeyringError as exc:
         raise CLIError(
             "no keyring backend available; set SWAIN_CLI_AUTH_TOKEN for this session"
@@ -292,6 +308,7 @@ def persist_auth_token(token: str) -> None:
 def clear_auth_state() -> None:
     try:
         keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_REFRESH_USERNAME)
     except (NoKeyringError, PasswordDeleteError):
         return
 
@@ -451,6 +468,56 @@ def _pick(mapping: Dict[str, Any], *keys: str) -> Any:
         if key in mapping:
             return mapping[key]
     return None
+
+
+def swain_login_with_credentials(
+    base_url: str, username: str, password: str
+) -> Dict[str, Any]:
+    if not username.strip():
+        raise CLIError("username is required for credential login")
+    if not password:
+        raise CLIError("password is required for credential login")
+    login_url = _swain_url(base_url, "auth/login")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+    }
+    payload = {"username": username, "password": password}
+    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        try:
+            response = client.post(login_url, headers=headers, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                status = exc.response.status_code
+                reason = exc.response.reason_phrase
+                detail = f"{status} {reason}".strip()
+                body = exc.response.text.strip()
+                if body:
+                    try:
+                        data = exc.response.json()
+                        error_msg = _safe_str(
+                            data.get("detail") if isinstance(data, dict) else None
+                        )
+                        if error_msg:
+                            detail = f"{detail}: {error_msg}" if detail else error_msg
+                    except json.JSONDecodeError:
+                        first_line = body.splitlines()[0]
+                        detail = f"{detail}: {first_line}" if detail else first_line
+            if not detail:
+                detail = str(exc)
+            raise CLIError(f"credential login failed: {detail}") from exc
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:
+        raise CLIError("login response was not valid JSON") from exc
+    token = _safe_str(data.get("token"))
+    if not token:
+        raise CLIError("login response did not include an access token")
+    return data
 
 
 def fetch_swain_projects(
@@ -1022,7 +1089,7 @@ def prompt_password(prompt: str) -> str:
     return result.strip()
 
 
-def prompt_select(prompt: str, choices: Sequence[questionary.Choice]) -> Any:
+def prompt_select(prompt: str, choices: Sequence[Any]) -> Any:
     result = questionary.select(prompt, choices=choices).ask()
     if result is None:
         raise InteractionAborted()
@@ -1323,6 +1390,27 @@ def read_login_token(args: SimpleNamespace) -> str:
         if not data:
             raise CLIError("no token received on stdin")
         return data
+    prompt_credentials = bool(getattr(args, "credentials", False))
+    username = getattr(args, "username", None)
+    password = getattr(args, "password", None)
+    auth_base = getattr(args, "auth_base_url", None) or DEFAULT_CRUDSQL_BASE_URL
+    if username or password or prompt_credentials:
+        if not username:
+            username = prompt_text("Username or email")
+        if password is None:
+            password = prompt_password("Password")
+        login_payload = swain_login_with_credentials(auth_base, username, password)
+        token_value = _safe_str(login_payload.get("token"))
+        if not token_value:
+            raise CLIError("credential login did not return an access token")
+        refresh_value = _safe_str(
+            login_payload.get("refresh_token")
+            or login_payload.get("refreshToken")
+            or login_payload.get("refresh-token")
+        )
+        setattr(args, "login_response", login_payload)
+        setattr(args, "login_refresh_token", refresh_value)
+        return token_value
     env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
     if env_token:
         return env_token
@@ -1338,7 +1426,12 @@ def read_login_token(args: SimpleNamespace) -> str:
 
 def handle_auth_login(args: SimpleNamespace) -> int:
     token = read_login_token(args)
-    persist_auth_token(token)
+    refresh = getattr(args, "login_refresh_token", None)
+    persist_auth_token(token, refresh)
+    if refresh:
+        log(
+            "refresh token stored in keyring"
+        )
     return 0
 
 
@@ -1358,6 +1451,8 @@ def handle_auth_status(_: SimpleNamespace) -> int:
     if state.access_token:
         log("auth token source: system keyring")
         log(f"effective token: {mask_token(state.access_token)}")
+        if state.refresh_token:
+            log("refresh token: stored")
         return 0
     log("auth token: not configured")
     backend = getattr(keyring, "get_keyring", lambda: None)()
@@ -1414,16 +1509,18 @@ def run_interactive(args: SimpleNamespace) -> int:
                     f"Detected single project: {swain_project.name} (#{swain_project.id})"
                 )
             else:
-                choices = [
+                project_options = {project.id: project for project in projects}
+                project_choices = [
                     questionary.Choice(
                         title=f"{project.name} (#{project.id})",
-                        value=project,
+                        value=project.id,
                     )
                     for project in projects
                 ]
-                swain_project = prompt_select(
-                    "Select a project", choices
-                )  # type: ignore[assignment]
+                selected_project_id = prompt_select(
+                    "Select a project", project_choices
+                )
+                swain_project = project_options[selected_project_id]
 
             connections = fetch_swain_connections(
                 crudsql_base, token, project_id=swain_project.id
@@ -1439,19 +1536,22 @@ def run_interactive(args: SimpleNamespace) -> int:
                     f" {swain_connection.database_name or swain_connection.id}"
                 )
             else:
+                connection_options = {conn.id: conn for conn in connections}
                 connection_choices = [
                     questionary.Choice(
-                        title=
-                        f"#{conn.id} - {conn.database_name or 'connection'}"
-                        f" ({conn.driver or 'driver'},"
-                        f" schema={conn.schema_name or 'n/a'})",
-                        value=conn,
+                        title=(
+                            f"#{conn.id} - {conn.database_name or 'connection'}"
+                            f" ({conn.driver or 'driver'},"
+                            f" schema={conn.schema_name or 'n/a'})"
+                        ),
+                        value=conn.id,
                     )
                     for conn in connections
                 ]
-                swain_connection = prompt_select(
+                selected_connection_id = prompt_select(
                     "Select a connection", connection_choices
-                )  # type: ignore[assignment]
+                )
+                swain_connection = connection_options[selected_connection_id]
         else:
             schema_input = prompt_text(
                 "Schema path or URL",
@@ -1845,8 +1945,37 @@ def auth_login(
         "--no-prompt",
         help="fail instead of prompting when no token is provided",
     ),
+    username: Optional[str] = typer.Option(
+        None,
+        "--username",
+        "-u",
+        help="Swain username or email for credential login",
+    ),
+    password: Optional[str] = typer.Option(
+        None,
+        "--password",
+        help="Password for credential login (not recommended; prefer prompt)",
+    ),
+    credentials: bool = typer.Option(
+        False,
+        "--credentials",
+        help="Prompt for username and password to request a token from the Swain backend",
+    ),
+    auth_base_url: Optional[str] = typer.Option(
+        None,
+        "--auth-base-url",
+        help=f"Authentication base URL (default: {DEFAULT_CRUDSQL_BASE_URL})",
+    ),
 ) -> None:
-    args = SimpleNamespace(token=token, stdin=stdin, no_prompt=no_prompt)
+    args = SimpleNamespace(
+        token=token,
+        stdin=stdin,
+        no_prompt=no_prompt,
+        username=username,
+        password=password,
+        credentials=credentials,
+        auth_base_url=auth_base_url,
+    )
     try:
         rc = handle_auth_login(args)
     except CLIError as exc:

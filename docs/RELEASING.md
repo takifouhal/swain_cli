@@ -7,6 +7,11 @@ This runbook covers the end-to-end steps for shipping a tagged release that incl
 - **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swain_cli/cli.py` whenever you move the downloads to a new release tag.
 - **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
 
+### Release notes — v0.2.2
+- Added credential-based authentication (`swain_cli auth login --credentials`) that stores both access and refresh tokens in the system keyring.
+- Fixed the interactive project/connection picker so questionary no longer crashes when rendering choices.
+- Bumped the default release assets to `v0.2.2` and refreshed packaging/tests prior to publish.
+
 ## 1. Pre-release checklist
 - Confirm `main` contains the changes you intend to release and that `plan.md` or changelog notes are up to date.
 - Run the full test suite locally: `python -m pytest`.

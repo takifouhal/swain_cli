@@ -1,5 +1,5 @@
 packageName: my_api_client
 projectName: my_api_client
-packageVersion: 0.2.1
+packageVersion: 0.2.2
 generateSourceCodeOnly: true
 enumPropertyNaming: PascalCase

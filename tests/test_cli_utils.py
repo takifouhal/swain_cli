@@ -284,17 +284,105 @@ def test_read_login_token_no_prompt(monkeypatch):
         cli.read_login_token(args)
 
 
+def test_swain_login_with_credentials_success(monkeypatch):
+    response = FakeResponse(
+        "https://api.example.com/auth/login",
+        json_data={"token": "abc", "refresh_token": "refresh"},
+        content=b"{}",
+    )
+
+    def fake_client(**kwargs):
+        return FakeClient([response])
+
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
+    data = cli.swain_login_with_credentials(
+        "https://api.example.com", "user@example.com", "secret"
+    )
+    assert data["token"] == "abc"
+    assert data["refresh_token"] == "refresh"
+
+
+def test_read_login_token_with_credentials(monkeypatch):
+    def fake_login(base, username, password):
+        assert base == "https://api.example.com"
+        assert username == "alice"
+        assert password == "wonderland"
+        return {"token": "abc", "refresh_token": "refresh"}
+
+    monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
+    args = SimpleNamespace(
+        token=None,
+        stdin=False,
+        no_prompt=False,
+        username="alice",
+        password="wonderland",
+        credentials=False,
+        auth_base_url="https://api.example.com",
+    )
+    token = cli.read_login_token(args)
+    assert token == "abc"
+    assert getattr(args, "login_refresh_token") == "refresh"
+
+
+def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
+    monkeypatch.setattr(cli, "prompt_text", lambda *a, **k: "bob")
+    monkeypatch.setattr(cli, "prompt_password", lambda *a, **k: "builder")
+    monkeypatch.setattr(
+        cli,
+        "swain_login_with_credentials",
+        lambda base, user, pwd: {"token": "xyz", "refresh_token": None},
+    )
+    args = SimpleNamespace(
+        token=None,
+        stdin=False,
+        no_prompt=False,
+        username=None,
+        password=None,
+        credentials=True,
+        auth_base_url=None,
+    )
+    token = cli.read_login_token(args)
+    assert token == "xyz"
+    assert getattr(args, "login_refresh_token") is None
+
+
 def test_auth_login_uses_keyring():
     args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
     assert cli.handle_auth_login(args) == 0
-    assert cli.load_auth_state().access_token == "supersecret"
+    state = cli.load_auth_state()
+    assert state.access_token == "supersecret"
+    assert state.refresh_token is None
+
+
+def test_handle_auth_login_with_credentials(monkeypatch):
+    def fake_login(base, username, password):
+        assert username == "carol"
+        assert password == "password123"
+        return {"token": "new-token", "refresh_token": "new-refresh"}
+
+    monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
+    args = SimpleNamespace(
+        token=None,
+        stdin=False,
+        no_prompt=False,
+        username="carol",
+        password="password123",
+        credentials=False,
+        auth_base_url="https://api.swain.technology",
+    )
+    assert cli.handle_auth_login(args) == 0
+    state = cli.load_auth_state()
+    assert state.access_token == "new-token"
+    assert state.refresh_token == "new-refresh"
 
 
 def test_auth_logout_removes_token():
     args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
     cli.handle_auth_login(args)
     assert cli.handle_auth_logout(SimpleNamespace()) == 0
-    assert cli.load_auth_state().access_token is None
+    state = cli.load_auth_state()
+    assert state.access_token is None
+    assert state.refresh_token is None
 
 
 def test_auth_status_prefers_env(monkeypatch, capfd):

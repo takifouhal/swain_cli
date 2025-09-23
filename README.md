@@ -31,7 +31,7 @@ swain_cli list-generators
 
 # Generate Python and TypeScript clients into ./sdks/<generator>
 swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
-  -p packageName=my_api_client -p packageVersion=0.2.1
+  -p packageName=my_api_client -p packageVersion=0.2.2
 ```
 
 `swain_cli` streams OpenAPI Generator output directly, so you see progress as the SDK is generated.
@@ -55,6 +55,7 @@ Use the `auth` subcommands to prime swain_cli with credentials for the hosted pl
 - `swain_cli auth logout`: Delete the stored token if you need to rotate or clear credentials.
 - Tokens live in the system keyring; use `SWAIN_CLI_AUTH_TOKEN` for ephemeral sessions or automation.
 - The `swain_cli interactive` wizard begins by checking for an access token and will prompt you to add or replace one before continuing if none is available.
+- Credential login: run `swain_cli auth login --credentials --username you@example.com` to let the CLI call `POST /auth/login`, prompt for your password securely, and store both the access and refresh token in the keyring. Supplying `--password <value>` works for non-interactive use, but piping via stdin or prompting is safer so the secret does not end up in shell history.
 
 ```
                                +--------------------+
