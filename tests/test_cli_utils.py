@@ -1,4 +1,6 @@
 import argparse
+import io
+import json
 import os
 import subprocess
 import sys
@@ -100,8 +102,11 @@ def test_extract_archive_unknown(tmp_path):
 
 
 def test_interactive_wizard_skip_generation(monkeypatch, capfd):
+    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token")
+
     responses = iter(
         [
+            "",  # reuse existing token
             "http://example.com/openapi.yaml",  # schema
             "sdks",  # output directory
             "TypeScript",  # languages (case-insensitive)
@@ -140,8 +145,11 @@ def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):
     config_valid = tmp_path / "config.yaml"
     config_valid.write_text("generator: python")
 
+    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token")
+
     responses = iter(
         [
+            "",  # reuse existing token
             str(schema),  # schema path
             str(tmp_path / "sdks"),  # output directory
             "python",  # languages
@@ -173,3 +181,67 @@ def test_interactive_reprompts_on_missing_config(tmp_path, monkeypatch, capfd):
     out, err = capfd.readouterr()
     assert "config file" in err
     assert str(config_valid) in out
+
+
+def test_auth_login_writes_config(tmp_path, monkeypatch):
+    cli.get_config_paths.cache_clear()
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(config_dir))
+
+    try:
+        args = argparse.Namespace(token="supersecret", stdin=False, no_prompt=False)
+        assert cli.handle_auth_login(args) == 0
+
+        auth_file = config_dir / cli.AUTH_FILE_NAME
+        assert auth_file.exists()
+        data = json.loads(auth_file.read_text())
+        assert data["access_token"] == "supersecret"
+    finally:
+        cli.get_config_paths.cache_clear()
+
+
+def test_auth_logout_removes_file(tmp_path, monkeypatch):
+    cli.get_config_paths.cache_clear()
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(config_dir))
+
+    try:
+        cli.save_auth_state(cli.AuthState("stored-token"))
+        auth_file = config_dir / cli.AUTH_FILE_NAME
+        assert auth_file.exists()
+
+        assert cli.handle_auth_logout(argparse.Namespace()) == 0
+        assert not auth_file.exists()
+    finally:
+        cli.get_config_paths.cache_clear()
+
+
+def test_auth_status_prefers_env(tmp_path, monkeypatch, capfd):
+    cli.get_config_paths.cache_clear()
+    monkeypatch.setenv(cli.CONFIG_ENV_VAR, str(tmp_path / "config"))
+    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token-value")
+
+    try:
+        assert cli.handle_auth_status(argparse.Namespace()) == 0
+    finally:
+        cli.get_config_paths.cache_clear()
+
+    out, err = capfd.readouterr()
+    assert "environment variable" in out
+    assert "env-token-value" not in out  # token should be masked
+    assert "effective token" in out
+    assert err == ""
+
+
+def test_read_login_token_stdin(monkeypatch):
+    stream = io.StringIO("stdin-token\n")
+    monkeypatch.setattr(sys, "stdin", stream)
+    args = argparse.Namespace(token=None, stdin=True, no_prompt=False)
+    assert cli.read_login_token(args) == "stdin-token"
+
+
+def test_read_login_token_no_prompt(monkeypatch):
+    monkeypatch.delenv(cli.AUTH_TOKEN_ENV_VAR, raising=False)
+    args = argparse.Namespace(token=None, stdin=False, no_prompt=True)
+    with pytest.raises(cli.CLIError):
+        cli.read_login_token(args)

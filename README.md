@@ -41,9 +41,55 @@ swaggen gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 - `swaggen interactive` — answer a short Q&A and swaggen assembles (and optionally runs) the matching `swaggen gen` command
 - `swaggen list-generators` — enumerate supported generators; add `--engine system` to check a local Java installation
 - `swaggen doctor` — print environment details, cache paths, installed JREs, and whether the vendor JAR is available
+- `swaggen auth` — log in, log out, or inspect authentication state for future swaggen features
 - `swaggen engine <action>` — manage the embedded runtime (`status`, `install-jre`, `update-jar`, `use-system`, `use-embedded`)
 
 Run `swaggen --help` or `swaggen <command> --help` for complete usage.
+
+## Authentication
+Use the `auth` subcommands to prime swaggen with credentials for the hosted platform you will be integrating with.
+
+- `swaggen auth login`: Supply an access token via `--token <value>`, pipe it with `--stdin`, or let swaggen prompt securely. The token is written to a per-user config file (`auth.json`) with user-only permissions where the OS supports it.
+- `swaggen auth status`: Inspect the currently active token source and see where swaggen will read credentials from.
+- `swaggen auth logout`: Delete the stored token if you need to rotate or clear credentials.
+- Override the configuration root with `SWAGGEN_CONFIG_DIR=/custom/path`. The default lives under the platform’s standard config directory (for example `~/Library/Application Support/swaggen`).
+- The `swaggen interactive` wizard begins by checking for an access token and will prompt you to add or replace one before continuing if none is available.
+
+```
+                               +--------------------+
+                               | swaggen auth login |
+                               +----------+---------+
+                                          |
+               +--------------------------+---------------------------+
+               |                          |                           |
+         --token flag            --stdin (piped input)          interactive prompt
+               |                          |                           |
+               +--------------------------+---------------------------+
+                                          |
+                                          v
+                               +--------------------+
+                               | write auth.json    |
+                               | (user config dir)  |
+                               +----------+---------+
+                                          |
+                                resolve_auth_token()
+                                          |
+                           +--------------+--------------+
+                           |                             |
+             SWAGGEN_AUTH_TOKEN set?          stored token available?
+                           |                             |
+                    use env token          use masked value from auth.json
+                           |                             |
+                           +--------------+--------------+
+                                          |
+                                          v
+                               +--------------------+
+                               | authenticated CLI  |
+                               | requests (future)  |
+                               +--------------------+
+```
+
+`SWAGGEN_AUTH_TOKEN` always takes precedence over anything written to disk, which is useful for one-off runs in CI. Pair `swaggen auth status` with `SWAGGEN_CONFIG_DIR` to verify exactly which file swaggen will read when the CLI gains authenticated commands.
 
 ## Generating clients effectively
 - **Multiple targets**: Pass `-l`/`--lang` repeatedly (`swaggen gen ... -l python -l typescript`) and each generator gets its own subfolder beneath the output directory.

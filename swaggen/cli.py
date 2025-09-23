@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import shlex
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from getpass import getpass
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -32,6 +34,11 @@ EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
 EXIT_CODE_INTERRUPT = 130
 LANGUAGE_ALIASES = {"typescript": "typescript-axios"}
+
+CONFIG_ENV_VAR = "SWAGGEN_CONFIG_DIR"
+AUTH_TOKEN_ENV_VAR = "SWAGGEN_AUTH_TOKEN"
+AUTH_FILE_NAME = "auth.json"
+DEFAULT_CONFIG_DIR_NAME = "swaggen"
 
 COMMON_LANGUAGES = [
     "python",
@@ -137,6 +144,35 @@ class EnginePaths:
         return Path(__file__).resolve().parent / "vendor" / VENDOR_JAR_NAME
 
 
+@dataclass(frozen=True)
+class ConfigPaths:
+    root: Path
+
+    @classmethod
+    def detect(cls) -> "ConfigPaths":
+        explicit = os.environ.get(CONFIG_ENV_VAR)
+        if explicit:
+            root = Path(explicit).expanduser()
+            root.mkdir(parents=True, exist_ok=True)
+            return cls(root)
+
+        info = get_platform_info()
+        home = Path.home()
+        if info.os_name == "windows":
+            base = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        elif info.os_name == "macos":
+            base = home / "Library" / "Application Support"
+        else:
+            base = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+
+        root = base / DEFAULT_CONFIG_DIR_NAME
+        root.mkdir(parents=True, exist_ok=True)
+        return cls(root)
+
+    def auth_file(self) -> Path:
+        return self.root / AUTH_FILE_NAME
+
+
 @dataclass
 class EngineSnapshot:
     platform: PlatformInfo
@@ -147,6 +183,11 @@ class EngineSnapshot:
     selected_generator_error: Optional[str]
     cached_jars: List[str]
     system_java: Optional[str]
+
+
+@dataclass
+class AuthState:
+    access_token: Optional[str] = None
 
 
 def log(message: str) -> None:
@@ -165,6 +206,11 @@ def get_platform_info() -> PlatformInfo:
 @lru_cache()
 def get_engine_paths() -> EnginePaths:
     return EnginePaths.detect()
+
+
+@lru_cache()
+def get_config_paths() -> ConfigPaths:
+    return ConfigPaths.detect()
 
 
 def normalize_os(system: str) -> str:
@@ -191,12 +237,20 @@ def cache_root() -> Path:
     return get_engine_paths().cache_root
 
 
+def config_root() -> Path:
+    return get_config_paths().root
+
+
 def jre_install_dir() -> Path:
     return get_engine_paths().jre_dir(get_platform_info())
 
 
 def jar_cache_dir() -> Path:
     return get_engine_paths().jar_dir()
+
+
+def auth_config_path() -> Path:
+    return get_config_paths().auth_file()
 
 
 def downloads_dir() -> Path:
@@ -210,6 +264,112 @@ def vendor_jar_path() -> Path:
 def find_vendor_jar() -> Optional[Path]:
     jar_path = vendor_jar_path()
     return jar_path if jar_path.exists() else None
+
+
+def load_auth_state() -> AuthState:
+    path = auth_config_path()
+    if not path.exists():
+        return AuthState()
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CLIError(f"unable to read auth configuration {path}: {exc}") from exc
+
+    if not content.strip():
+        return AuthState()
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise CLIError(
+            f"auth configuration {path} contains invalid JSON: {exc}"
+        ) from exc
+
+    token = data.get("access_token")
+    if token is not None and not isinstance(token, str):
+        raise CLIError(
+            f"auth configuration {path} has a non-string access_token value"
+        )
+
+    normalized = token.strip() if token else None
+    return AuthState(normalized)
+
+
+def save_auth_state(state: AuthState) -> None:
+    if not state.access_token:
+        raise CLIError("attempted to save empty auth state")
+
+    path = auth_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {"access_token": state.access_token}
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=path.parent,
+        ) as tmp:
+            json.dump(payload, tmp, indent=2)
+            tmp.write("\n")
+            temp_path = Path(tmp.name)
+    except OSError as exc:
+        raise CLIError(f"unable to write auth configuration {path}: {exc}") from exc
+
+    try:
+        os.replace(temp_path, path)
+        if os.name != "nt":
+            path.chmod(0o600)
+    except OSError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise CLIError(f"unable to finalize auth configuration {path}: {exc}") from exc
+
+
+def clear_auth_state() -> None:
+    path = auth_config_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise CLIError(f"unable to remove auth configuration {path}: {exc}") from exc
+
+
+def mask_token(token: str) -> str:
+    if len(token) <= 8:
+        return "*" * len(token)
+    return f"{token[:4]}...{token[-4:]}"
+
+
+def resolve_auth_token() -> Optional[str]:
+    env_token = os.environ.get(AUTH_TOKEN_ENV_VAR)
+    if env_token:
+        stripped = env_token.strip()
+        if stripped:
+            return stripped
+
+    state = load_auth_state()
+    return state.access_token
+
+
+def persist_auth_token(token: str) -> None:
+    normalized = token.strip()
+    if not normalized:
+        raise CLIError("attempted to persist empty auth token")
+
+    save_auth_state(AuthState(normalized))
+    log(f"stored access token ({mask_token(normalized)}) at {auth_config_path()}")
+
+
+def require_auth_token(purpose: str = "perform this action") -> str:
+    token = resolve_auth_token()
+    if not token:
+        raise CLIError(
+            f"authentication token required to {purpose}; run 'swaggen auth login'"
+        )
+    return token
 
 
 def get_jre_asset() -> JREAsset:
@@ -498,6 +658,88 @@ def run_openapi_generator(jar: Path, engine: str, generator_args: Sequence[str])
     return proc.returncode
 
 
+def read_login_token(args: argparse.Namespace) -> str:
+    if getattr(args, "token", None):
+        token = args.token.strip()
+        if not token:
+            raise CLIError("--token was provided but is empty")
+        return token
+
+    if getattr(args, "stdin", False):
+        data = sys.stdin.read().strip()
+        if not data:
+            raise CLIError("no token received on stdin")
+        return data
+
+    env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
+    if env_token:
+        return env_token
+
+    if getattr(args, "no_prompt", False):
+        raise CLIError(
+            "no token provided; supply --token, --stdin, or set SWAGGEN_AUTH_TOKEN"
+        )
+
+    try:
+        return obtain_token_from_user(allow_reuse=False)
+    except InteractionAborted as exc:
+        raise CLIError("login cancelled") from exc
+
+
+def obtain_token_from_user(*, allow_reuse: bool) -> str:
+    existing = resolve_auth_token()
+    if existing and allow_reuse:
+        log(f"authentication token detected ({mask_token(existing)})")
+        if prompt_yes_no("Reuse this token?", default=True):
+            return existing
+        log("Enter a replacement token.")
+
+    while True:
+        try:
+            token = getpass("Access token: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise InteractionAborted()
+
+        token = token.strip()
+        if not token:
+            log_error("access token cannot be empty")
+            continue
+        return token
+
+
+def handle_auth_login(args: argparse.Namespace) -> int:
+    token = read_login_token(args)
+    persist_auth_token(token)
+    return 0
+
+
+def handle_auth_logout(args: argparse.Namespace) -> int:
+    clear_auth_state()
+    log("removed stored access token")
+    return 0
+
+
+def handle_auth_status(args: argparse.Namespace) -> int:
+    env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
+    config_path = auth_config_path()
+
+    if env_token:
+        log("auth token source: environment variable")
+        log(f"effective token: {mask_token(env_token)}")
+        return 0
+
+    state = load_auth_state()
+    if state.access_token:
+        log("auth token source: stored credential")
+        log(f"effective token: {mask_token(state.access_token)}")
+        log(f"config file: {config_path}")
+    else:
+        log("auth token: not configured")
+        log(f"config file: {config_path}")
+    return 0
+
+
 def handle_doctor(args: argparse.Namespace) -> int:
     system = platform.platform()
     python_version = sys.version.replace("\n", " ")
@@ -711,6 +953,20 @@ def prompt_yes_no(prompt: str, *, default: bool) -> bool:
         log_error("please answer with 'y' or 'n'")
 
 
+def interactive_auth_setup() -> None:
+    existing = resolve_auth_token()
+    if existing:
+        if prompt_yes_no("Reuse the existing authentication token?", default=True):
+            return
+    else:
+        log("no authentication token configured.")
+        if not prompt_yes_no("Add an access token before continuing?", default=True):
+            raise CLIError("authentication token required; run 'swaggen auth login'")
+
+    token = obtain_token_from_user(allow_reuse=False)
+    persist_auth_token(token)
+
+
 def guess_default_schema() -> Optional[Path]:
     for candidate in (
         Path("openapi.yaml"),
@@ -730,6 +986,8 @@ def format_cli_command(argv: Sequence[str]) -> str:
 def handle_interactive(args: argparse.Namespace) -> int:
     log("interactive SDK generation wizard")
     log("press Ctrl+C at any time to cancel")
+
+    interactive_auth_setup()
 
     schema_default = guess_default_schema()
 
@@ -957,6 +1215,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="select Java runtime (default: embedded)",
     )
     parser_list.set_defaults(func=handle_list_generators)
+
+    parser_auth = subparsers.add_parser(
+        "auth", help="manage authentication for swaggen services"
+    )
+    auth_sub = parser_auth.add_subparsers(dest="auth_command")
+    auth_sub.required = True
+
+    parser_auth_login = auth_sub.add_parser(
+        "login", help="store an access token for future commands"
+    )
+    parser_auth_login.add_argument(
+        "--token",
+        help="access token value (otherwise read from stdin, env, or prompt)",
+    )
+    parser_auth_login.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read the access token from standard input",
+    )
+    parser_auth_login.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="fail instead of prompting when no token is provided",
+    )
+    parser_auth_login.set_defaults(func=handle_auth_login)
+
+    parser_auth_logout = auth_sub.add_parser(
+        "logout", help="remove any stored access token"
+    )
+    parser_auth_logout.set_defaults(func=handle_auth_logout)
+
+    parser_auth_status = auth_sub.add_parser(
+        "status", help="display current authentication status"
+    )
+    parser_auth_status.set_defaults(func=handle_auth_status)
 
     parser_gen = subparsers.add_parser(
         "gen", help="generate SDKs using OpenAPI Generator"
