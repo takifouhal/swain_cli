@@ -108,9 +108,10 @@ def test_crudsql_dynamic_swagger_url_variants():
 
 
 def test_fetch_crudsql_schema_success(monkeypatch):
-    payload = b"{\"swagger\": \"2.0\"}"
+    discovery_payload = b"{\"schema_url\": \"/openapi/custom.json\"}"
+    schema_payload = b"{\"swagger\": \"2.0\"}"
 
-    class DummyResponse:
+    class DiscoveryResponse:
         def __enter__(self):
             return self
 
@@ -118,13 +119,28 @@ def test_fetch_crudsql_schema_success(monkeypatch):
             return False
 
         def read(self):
-            return payload
+            return discovery_payload
+
+    class SchemaResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return schema_payload
+
+    calls = []
 
     def fake_urlopen(request):
-        assert request.full_url == "https://api.example.com/api/dynamic_swagger"
+        calls.append(request.full_url)
         assert request.headers["Authorization"] == "Bearer token123"
         assert "swaggen" in request.get_header("User-agent")
-        return DummyResponse()
+        if request.full_url.endswith("/api/schema-location"):
+            return DiscoveryResponse()
+        assert request.full_url == "https://api.example.com/openapi/custom.json"
+        return SchemaResponse()
 
     monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
 
@@ -134,6 +150,11 @@ def test_fetch_crudsql_schema_success(monkeypatch):
         assert data["swagger"] == "2.0"
     finally:
         path.unlink(missing_ok=True)
+
+    assert calls == [
+        "https://api.example.com/api/schema-location",
+        "https://api.example.com/openapi/custom.json",
+    ]
 
 
 def test_fetch_crudsql_schema_http_error(monkeypatch):
@@ -152,6 +173,44 @@ def test_fetch_crudsql_schema_http_error(monkeypatch):
         cli.fetch_crudsql_schema("https://api.example.com", "token123")
 
     assert "401" in str(excinfo.value)
+
+
+def test_fetch_crudsql_schema_falls_back(monkeypatch):
+    schema_payload = b"{}"
+
+    class SchemaResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return schema_payload
+
+    responses = []
+
+    def fake_urlopen(request):
+        responses.append(request.full_url)
+        if request.full_url.endswith("/api/schema-location"):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "not found",
+                hdrs=None,
+                fp=io.BytesIO(b"missing"),
+            )
+        return SchemaResponse()
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+
+    path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    try:
+        assert path.read_text() == "{}"
+    finally:
+        path.unlink(missing_ok=True)
+
+    assert responses[-1] == "https://api.example.com/api/dynamic_swagger"
 
 
 def test_extract_archive_unknown(tmp_path):

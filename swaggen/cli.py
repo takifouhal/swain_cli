@@ -385,9 +385,9 @@ def crudsql_dynamic_swagger_url(base_url: str) -> str:
     return urllib.parse.urljoin(normalized_base, "api/dynamic_swagger")
 
 
-def fetch_crudsql_schema(base_url: str, token: str) -> Path:
-    url = crudsql_dynamic_swagger_url(base_url)
-    log(f"fetching CrudSQL dynamic swagger from {url}")
+def crudsql_discover_schema_url(base_url: str, token: str) -> str:
+    normalized_base = base_url.rstrip("/") + "/"
+    discovery_url = urllib.parse.urljoin(normalized_base, "api/schema-location")
 
     headers = {
         "Accept": "application/json",
@@ -396,7 +396,50 @@ def fetch_crudsql_schema(base_url: str, token: str) -> Path:
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    request = urllib.request.Request(url, headers=headers)
+    request = urllib.request.Request(discovery_url, headers=headers)
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            payload = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return crudsql_dynamic_swagger_url(base_url)
+        detail = f"{exc.code} {exc.reason}".strip()
+        raise CLIError(
+            f"failed to resolve CrudSQL schema location from {discovery_url}: {detail}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise CLIError(
+            f"failed to contact CrudSQL discovery endpoint {discovery_url}: {exc}"
+        ) from exc
+
+    if not payload or not payload.strip():
+        return crudsql_dynamic_swagger_url(base_url)
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return crudsql_dynamic_swagger_url(base_url)
+
+    schema_url = data.get("schema_url") or data.get("schemaUrl")
+    if not isinstance(schema_url, str) or not schema_url.strip():
+        return crudsql_dynamic_swagger_url(base_url)
+
+    return urllib.parse.urljoin(normalized_base, schema_url.strip())
+
+
+def fetch_crudsql_schema(base_url: str, token: str) -> Path:
+    schema_url = crudsql_discover_schema_url(base_url, token)
+    log(f"fetching CrudSQL schema from {schema_url}")
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": f"swaggen/{PINNED_GENERATOR_VERSION}",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urllib.request.Request(schema_url, headers=headers)
 
     try:
         with urllib.request.urlopen(request) as response:
@@ -414,10 +457,12 @@ def fetch_crudsql_schema(base_url: str, token: str) -> Path:
             first_line = body.splitlines()[0]
             detail = f"{detail}: {first_line}" if detail else first_line
         raise CLIError(
-            f"failed to fetch CrudSQL schema from {url}: {detail}"
+            f"failed to fetch CrudSQL schema from {schema_url}: {detail}"
         ) from exc
     except urllib.error.URLError as exc:
-        raise CLIError(f"failed to reach CrudSQL backend at {url}: {exc}") from exc
+        raise CLIError(
+            f"failed to reach CrudSQL backend at {schema_url}: {exc}"
+        ) from exc
 
     if not payload or not payload.strip():
         raise CLIError("CrudSQL dynamic swagger response was empty")

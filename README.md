@@ -92,9 +92,32 @@ Use the `auth` subcommands to prime swaggen with credentials for the hosted plat
 `SWAGGEN_AUTH_TOKEN` always takes precedence over anything written to disk, which is useful for one-off runs in CI. Pair `swaggen auth status` with `SWAGGEN_CONFIG_DIR` to verify exactly which file swaggen will read when the CLI gains authenticated commands.
 
 ### CrudSQL integration
-- `swaggen gen` (with no schema flag) automatically downloads the CrudSQL server's `GET /api/dynamic_swagger` document from `https://api.swain.technology` using the stored token as a `Bearer` credential before running OpenAPI Generator.
+- `swaggen gen` (with no schema flag) automatically downloads the CrudSQL schema document from `https://api.swain.technology` using the stored token as a `Bearer` credential before running OpenAPI Generator. The CLI first calls `/api/schema-location` to resolve the live schema URL, then falls back to the legacy `/api/dynamic_swagger` path if discovery fails. (The production endpoint is still being finalized; expect this URL to change.)
 - Override the source with `--crudsql-url https://api.example.com` or bypass CrudSQL entirely by supplying `-i/--schema`.
 - The retrieved schema is cached to a temp file for the duration of the command and removed afterwards.
+
+```
+                 +-----------------------------------+
+                 | swaggen gen / interactive wizard  |
+                 +----------------+------------------+
+                                  |
+                        schema flag provided?
+                         (-i / --schema)
+                     yes /                \ no
+                    v                     v
+        use provided path/URL     CrudSQL base selected?
+                                           |
+                         +-----------------+-----------------+
+                         |                                   |
+                 flag or wizard override?          default host (Swain)
+                     (--crudsql-url)            https://api.swain.technology
+                         |                                   |
+                         v                                   v
+                resolve schema location -> download document with stored token
+                                  |
+                                  v
+                     run OpenAPI Generator for each language
+```
 
 ## Generating clients effectively
 - **Multiple targets**: Pass `-l`/`--lang` repeatedly (`swaggen gen ... -l python -l typescript`) and each generator gets its own subfolder beneath the output directory.
