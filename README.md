@@ -38,6 +38,7 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 
 ## Command overview
 - `swain_cli gen` — generate one or more SDKs; accepts the same configuration flags as OpenAPI Generator (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options. By default swain_cli pulls the CrudSQL dynamic swagger from `https://api.swain.technology`; override with `--crudsql-url` or provide `-i/--schema` to use a local file/URL instead.
+  - Add `--swain-project-id` and `--swain-connection-id` to resolve the schema from a specific Swain project/connection after authenticating. When these flags are present swain_cli fetches the connection's current build, resolves the deployed endpoint, and downloads `/api/dynamic_swagger` automatically.
 - `swain_cli interactive` — answer a short Q&A and swain_cli assembles (and optionally runs) the matching `swain_cli gen` command
 - `swain_cli list-generators` — enumerate supported generators; add `--engine system` to check a local Java installation
 - `swain_cli doctor` — print environment details, cache paths, installed JREs, and whether the vendor JAR is available
@@ -159,3 +160,4 @@ Use the `auth` subcommands to prime swain_cli with credentials for the hosted pl
 ## License
 
 swain_cli is released under the Apache 2.0 license. See `LICENSE` for details.
+- **Swain backend discovery**: With an auth token configured, you can run `swain_cli interactive` to browse your Swain projects and connections. The wizard lists projects, lets you pick a connection, and then downloads the matching dynamic swagger behind the scenes. To script the same behaviour non-interactively, pass `--swain-project-id <id>` and `--swain-connection-id <id>` to `swain_cli gen`.

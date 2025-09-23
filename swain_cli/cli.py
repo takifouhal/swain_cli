@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import httpx
 import keyring
@@ -125,6 +125,40 @@ class AuthState:
 @dataclass
 class CLIContext:
     generator_version: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SwainProject:
+    """Minimal representation of a Swain project."""
+
+    id: int
+    name: str
+    raw: Dict[str, Any]
+    description: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SwainConnection:
+    """Connection with optional build metadata for SDK generation."""
+
+    id: int
+    database_name: Optional[str]
+    driver: Optional[str]
+    stage: Optional[str]
+    project_name: Optional[str]
+    schema_name: Optional[str]
+    build_id: Optional[int]
+    build_endpoint: Optional[str]
+    connection_endpoint: Optional[str]
+    raw: Dict[str, Any]
+
+    @property
+    def effective_endpoint(self) -> Optional[str]:
+        candidate = (self.connection_endpoint or "").strip()
+        if candidate:
+            return candidate
+        build_candidate = (self.build_endpoint or "").strip()
+        return build_candidate or None
 
 
 def log(message: str) -> None:
@@ -370,6 +404,323 @@ def fetch_crudsql_schema(base_url: str, token: str) -> Path:
             return Path(handle.name)
     except OSError as exc:
         raise CLIError(f"failed to persist CrudSQL schema locally: {exc}") from exc
+
+
+def _swain_url(base_url: str, path: str) -> httpx.URL:
+    normalized = base_url.rstrip("/") + "/"
+    return httpx.URL(normalized).join(path)
+
+
+def _swain_request_headers(token: str) -> Dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _pick(mapping: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def fetch_swain_projects(
+    base_url: str,
+    token: str,
+    *,
+    page_size: int = 50,
+    max_pages: int = 25,
+) -> List[SwainProject]:
+    url = _swain_url(base_url, "Project")
+    headers = _swain_request_headers(token)
+    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    projects: List[SwainProject] = []
+    page = 1
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        while True:
+            params = {"page": page, "pageSize": page_size}
+            try:
+                response = client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                detail = ""
+                if isinstance(exc, httpx.HTTPStatusError):
+                    detail = f"{exc.response.status_code} {exc.response.reason_phrase}".strip()
+                    body = exc.response.text.strip()
+                    if body:
+                        first_line = body.splitlines()[0]
+                        detail = f"{detail}: {first_line}" if detail else first_line
+                if not detail:
+                    detail = str(exc)
+                raise CLIError(
+                    f"failed to fetch projects from {url}: {detail}"
+                ) from exc
+            try:
+                payload = response.json()
+            except json.JSONDecodeError as exc:
+                raise CLIError(
+                    "project listing response was not valid JSON"
+                ) from exc
+
+            items = payload.get("data") or []
+            if not isinstance(items, list):
+                raise CLIError("unexpected project payload structure")
+            for entry in items:
+                record = _as_dict(entry)
+                project_id = _safe_int(_pick(record, "id", "project_id", "projectId"))
+                if project_id is None:
+                    continue
+                name = _safe_str(_pick(record, "name"))
+                if not name:
+                    name = f"Project {project_id}"
+                description = _safe_str(_pick(record, "description"))
+                projects.append(
+                    SwainProject(
+                        id=project_id,
+                        name=name,
+                        description=description,
+                        raw=record,
+                    )
+                )
+
+            total_pages = _safe_int(_pick(payload, "total_pages", "totalPages")) or 1
+            if page >= total_pages:
+                break
+            page += 1
+            if page > max_pages:
+                break
+    return projects
+
+
+def _connection_filter_payload(
+    *, project_id: Optional[int] = None, connection_id: Optional[int] = None
+) -> Dict[str, Any]:
+    expressions: List[Dict[str, Any]] = []
+    if project_id is not None:
+        expressions.append(
+            {
+                "field": "project_id",
+                "operator": "eq",
+                "value": project_id,
+            }
+        )
+    if connection_id is not None:
+        expressions.append(
+            {
+                "field": "id",
+                "operator": "eq",
+                "value": connection_id,
+            }
+        )
+    expressions.extend(
+        [
+            {
+                "relationship": "Stage",
+                "scope": "filterChild",
+                "include": True,
+            },
+            {
+                "relationship": "Project",
+                "scope": "filterChild",
+                "include": True,
+            },
+            {
+                "relationship": "CurrentSchema",
+                "scope": "filterChild",
+                "include": True,
+                "expressions": [
+                    {
+                        "relationship": "CurrentBuild",
+                        "scope": "filterChild",
+                        "include": True,
+                    }
+                ],
+            },
+        ]
+    )
+    return {"expressions": expressions}
+
+
+def _parse_swain_connection(record: Dict[str, Any]) -> Optional[SwainConnection]:
+    connection_id = _safe_int(_pick(record, "id", "connection_id", "connectionId"))
+    if connection_id is None:
+        return None
+    database_name = _safe_str(
+        _pick(record, "dbname", "database_name", "databaseName", "name")
+    )
+    driver = _safe_str(_pick(record, "driver"))
+    stage = _safe_str(_pick(_as_dict(_pick(record, "stage")), "name"))
+    project_name = _safe_str(
+        _pick(_as_dict(_pick(record, "project")), "name")
+    )
+    current_schema = _as_dict(_pick(record, "current_schema", "currentSchema"))
+    schema_name = _safe_str(_pick(current_schema, "name"))
+    current_build = _as_dict(
+        _pick(current_schema, "current_build", "currentBuild")
+    )
+    build_endpoint = _safe_str(
+        _pick(current_build, "api_endpoint", "apiEndpoint")
+    )
+    build_id = _safe_int(_pick(current_build, "id"))
+    connection_endpoint = _safe_str(
+        _pick(record, "api_endpoint", "apiEndpoint")
+    )
+    return SwainConnection(
+        id=connection_id,
+        database_name=database_name,
+        driver=driver,
+        stage=stage,
+        project_name=project_name,
+        schema_name=schema_name,
+        build_id=build_id,
+        build_endpoint=build_endpoint,
+        connection_endpoint=connection_endpoint,
+        raw=record,
+    )
+
+
+def fetch_swain_connections(
+    base_url: str,
+    token: str,
+    *,
+    project_id: Optional[int] = None,
+    connection_id: Optional[int] = None,
+    page_size: int = 100,
+) -> List[SwainConnection]:
+    url = _swain_url(base_url, "Connection/filter")
+    headers = _swain_request_headers(token)
+    payload = _connection_filter_payload(
+        project_id=project_id, connection_id=connection_id
+    )
+    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        params = {"page": 1, "pageSize": page_size}
+        try:
+            response = client.post(url, headers=headers, params=params, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                detail = f"{exc.response.status_code} {exc.response.reason_phrase}".strip()
+                body = exc.response.text.strip()
+                if body:
+                    first_line = body.splitlines()[0]
+                    detail = f"{detail}: {first_line}" if detail else first_line
+            if not detail:
+                detail = str(exc)
+            raise CLIError(
+                f"failed to fetch connections from {url}: {detail}"
+            ) from exc
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise CLIError(
+                "connection filter response was not valid JSON"
+            ) from exc
+
+    items = payload.get("data") or []
+    if not isinstance(items, list):
+        raise CLIError("unexpected connection payload structure")
+
+    connections: List[SwainConnection] = []
+    for entry in items:
+        record = _as_dict(entry)
+        connection = _parse_swain_connection(record)
+        if connection:
+            connections.append(connection)
+    return connections
+
+
+def fetch_swain_connection_by_id(
+    base_url: str, token: str, connection_id: int
+) -> SwainConnection:
+    connections = fetch_swain_connections(
+        base_url,
+        token,
+        connection_id=connection_id,
+    )
+    if not connections:
+        raise CLIError(f"connection {connection_id} not found")
+    return connections[0]
+
+
+def swain_dynamic_swagger_from_connection(connection: SwainConnection) -> str:
+    endpoint = connection.effective_endpoint
+    if not endpoint:
+        raise CLIError(
+            f"connection {connection.id} has no API endpoint on the current build"
+        )
+    base = endpoint.rstrip("/")
+    return f"{base}/api/dynamic_swagger"
+
+
+def fetch_swain_connection_schema(
+    connection: SwainConnection, token: str
+) -> Path:
+    schema_url = swain_dynamic_swagger_from_connection(connection)
+    log(
+        f"fetching connection dynamic swagger from {schema_url} (connection {connection.id})"
+    )
+    headers = _swain_request_headers(token)
+    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        try:
+            response = client.get(schema_url, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            detail = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                status = exc.response.status_code
+                reason = exc.response.reason_phrase
+                detail = f"{status} {reason}".strip()
+                body = exc.response.text.strip()
+                if body:
+                    first_line = body.splitlines()[0]
+                    detail = f"{detail}: {first_line}" if detail else first_line
+            if not detail:
+                detail = str(exc)
+            raise CLIError(
+                f"failed to fetch connection swagger for {connection.id}: {detail}"
+            ) from exc
+    if not response.content or not response.content.strip():
+        raise CLIError("connection dynamic swagger response was empty")
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".json") as handle:
+            handle.write(response.content)
+            return Path(handle.name)
+    except OSError as exc:
+        raise CLIError(
+            f"failed to persist connection swagger for {connection.id}: {exc}"
+        ) from exc
 
 
 def get_jre_asset() -> JREAsset:
@@ -671,6 +1022,13 @@ def prompt_password(prompt: str) -> str:
     return result.strip()
 
 
+def prompt_select(prompt: str, choices: Sequence[questionary.Choice]) -> Any:
+    result = questionary.select(prompt, choices=choices).ask()
+    if result is None:
+        raise InteractionAborted()
+    return result
+
+
 def interactive_auth_setup() -> None:
     existing = resolve_auth_token()
     if existing:
@@ -751,7 +1109,10 @@ def handle_gen(args: SimpleNamespace) -> int:
     engine = args.engine
     schema_arg = getattr(args, "schema", None)
     crudsql_url = getattr(args, "crudsql_url", None)
+    swain_project_id = getattr(args, "swain_project_id", None)
+    swain_connection_id = getattr(args, "swain_connection_id", None)
     temp_schema: Optional[Path] = None
+    selected_connection: Optional[SwainConnection] = None
     try:
         if schema_arg:
             schema = schema_arg
@@ -762,9 +1123,86 @@ def handle_gen(args: SimpleNamespace) -> int:
                 schema = str(schema_path)
         else:
             base_url = (crudsql_url or "").strip() or DEFAULT_CRUDSQL_BASE_URL
-            token = require_auth_token("fetch the CrudSQL swagger document")
-            temp_schema = fetch_crudsql_schema(base_url, token)
-            schema = str(temp_schema)
+            purpose = (
+                "fetch the Swain connection swagger document"
+                if (swain_connection_id or swain_project_id)
+                else "fetch the CrudSQL swagger document"
+            )
+            token = require_auth_token(purpose)
+            if swain_connection_id or swain_project_id:
+                project_id_value: Optional[int] = None
+                connection_id_value: Optional[int] = None
+                if swain_project_id is not None:
+                    if isinstance(swain_project_id, int):
+                        project_id_value = swain_project_id
+                    else:
+                        try:
+                            project_id_value = int(swain_project_id)
+                        except (TypeError, ValueError) as exc:
+                            raise CLIError(
+                                f"invalid project id '{swain_project_id}'"
+                            ) from exc
+                if swain_connection_id is not None:
+                    if isinstance(swain_connection_id, int):
+                        connection_id_value = swain_connection_id
+                    else:
+                        try:
+                            connection_id_value = int(swain_connection_id)
+                        except (TypeError, ValueError) as exc:
+                            raise CLIError(
+                                f"invalid connection id '{swain_connection_id}'"
+                            ) from exc
+
+                if connection_id_value is not None:
+                    selected_connection = fetch_swain_connection_by_id(
+                        base_url, token, connection_id_value
+                    )
+                    if project_id_value is not None:
+                        connection_project_id = _safe_int(
+                            _pick(
+                                selected_connection.raw,
+                                "project_id",
+                                "projectId",
+                            )
+                        )
+                        if (
+                            connection_project_id is not None
+                            and connection_project_id != project_id_value
+                        ):
+                            log(
+                                "warning: connection project does not match provided project id"
+                            )
+                elif project_id_value is not None:
+                    connections = fetch_swain_connections(
+                        base_url,
+                        token,
+                        project_id=project_id_value,
+                    )
+                    if not connections:
+                        raise CLIError(
+                            f"no connections found for project {project_id_value}"
+                        )
+                    if len(connections) > 1:
+                        raise CLIError(
+                            "multiple connections found; specify --swain-connection-id"
+                        )
+                    selected_connection = connections[0]
+                else:
+                    raise CLIError(
+                        "--swain-connection-id or --swain-project-id is required when using Swain discovery"
+                    )
+
+                temp_schema = fetch_swain_connection_schema(selected_connection, token)
+                schema = str(temp_schema)
+                log(
+                    "using Swain connection"
+                    f" {selected_connection.id}"
+                    f" (project: {selected_connection.project_name or 'unknown'},"
+                    f" schema: {selected_connection.schema_name or 'unknown'})"
+                )
+            else:
+                temp_schema = fetch_crudsql_schema(base_url, token)
+                schema = str(temp_schema)
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
         languages = args.languages
@@ -948,10 +1386,13 @@ def run_interactive(args: SimpleNamespace) -> int:
 
     crudsql_base: Optional[str] = None
     schema_input: Optional[str] = None
+    swain_project: Optional[SwainProject] = None
+    swain_connection: Optional[SwainConnection] = None
 
     try:
-        if prompt_confirm("Fetch schema from a CrudSQL backend?", default=True):
-            def validate_crudsql_base(value: str) -> Optional[str]:
+        if prompt_confirm("Fetch schema from the Swain backend?", default=True):
+
+            def validate_swain_base(value: str) -> Optional[str]:
                 try:
                     crudsql_dynamic_swagger_url(value)
                 except CLIError as exc:
@@ -959,10 +1400,58 @@ def run_interactive(args: SimpleNamespace) -> int:
                 return None
 
             crudsql_base = prompt_text(
-                "CrudSQL base URL",
+                "Swain base URL",
                 default=DEFAULT_CRUDSQL_BASE_URL,
-                validate=validate_crudsql_base,
+                validate=validate_swain_base,
             )
+            token = require_auth_token("discover Swain projects and connections")
+            projects = fetch_swain_projects(crudsql_base, token)
+            if not projects:
+                raise CLIError("no projects available on the Swain backend")
+            if len(projects) == 1:
+                swain_project = projects[0]
+                log(
+                    f"Detected single project: {swain_project.name} (#{swain_project.id})"
+                )
+            else:
+                choices = [
+                    questionary.Choice(
+                        title=f"{project.name} (#{project.id})",
+                        value=project,
+                    )
+                    for project in projects
+                ]
+                swain_project = prompt_select(
+                    "Select a project", choices
+                )  # type: ignore[assignment]
+
+            connections = fetch_swain_connections(
+                crudsql_base, token, project_id=swain_project.id
+            )
+            if not connections:
+                raise CLIError(
+                    f"project {swain_project.name} has no connections with builds"
+                )
+            if len(connections) == 1:
+                swain_connection = connections[0]
+                log(
+                    "Detected single connection:"
+                    f" {swain_connection.database_name or swain_connection.id}"
+                )
+            else:
+                connection_choices = [
+                    questionary.Choice(
+                        title=
+                        f"#{conn.id} - {conn.database_name or 'connection'}"
+                        f" ({conn.driver or 'driver'},"
+                        f" schema={conn.schema_name or 'n/a'})",
+                        value=conn,
+                    )
+                    for conn in connections
+                ]
+                swain_connection = prompt_select(
+                    "Select a connection", connection_choices
+                )  # type: ignore[assignment]
         else:
             schema_input = prompt_text(
                 "Schema path or URL",
@@ -1084,7 +1573,10 @@ def run_interactive(args: SimpleNamespace) -> int:
         log_error("interactive session cancelled")
         return EXIT_CODE_INTERRUPT
 
-    if crudsql_base:
+    if swain_connection:
+        schema_value = swain_dynamic_swagger_from_connection(swain_connection)
+        schema_display = schema_value
+    elif crudsql_base:
         base_to_use = crudsql_base or DEFAULT_CRUDSQL_BASE_URL
         schema_value = crudsql_dynamic_swagger_url(base_to_use)
         schema_display = schema_value
@@ -1098,7 +1590,16 @@ def run_interactive(args: SimpleNamespace) -> int:
 
     out_value = str(Path(out_dir_input).expanduser())
     log("configuration preview")
-    if crudsql_base:
+    if swain_connection and swain_project:
+        log(f"  swain base: {crudsql_base}")
+        log(f"  project: {swain_project.name} (#{swain_project.id})")
+        log(
+            "  connection:"
+            f" #{swain_connection.id}"
+            f" ({swain_connection.database_name or 'connection'})"
+        )
+        log(f"  dynamic swagger: {schema_display}")
+    elif crudsql_base:
         log(f"  crudsql base: {crudsql_base}")
         log(f"  dynamic swagger: {schema_display}")
     else:
@@ -1123,7 +1624,12 @@ def run_interactive(args: SimpleNamespace) -> int:
     if args.generator_version:
         command_preview.extend(["--generator-version", args.generator_version])
     command_preview.append("gen")
-    if crudsql_base:
+    if swain_connection and swain_project:
+        if crudsql_base and crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
+            command_preview.extend(["--crudsql-url", crudsql_base])
+        command_preview.extend(["--swain-project-id", str(swain_project.id)])
+        command_preview.extend(["--swain-connection-id", str(swain_connection.id)])
+    elif crudsql_base:
         if crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
             command_preview.extend(["--crudsql-url", crudsql_base])
     else:
@@ -1159,6 +1665,8 @@ def run_interactive(args: SimpleNamespace) -> int:
         engine=engine_choice,
         schema=None if crudsql_base else schema_value,
         crudsql_url=crudsql_base,
+        swain_project_id=swain_project.id if swain_project else None,
+        swain_connection_id=swain_connection.id if swain_connection else None,
         out=out_value,
         languages=languages,
         config=config_value,
@@ -1254,6 +1762,16 @@ def gen(
         "--generator-arg",
         help="raw OpenAPI Generator argument (repeatable)",
     ),
+    swain_project_id: Optional[int] = typer.Option(
+        None,
+        "--swain-project-id",
+        help="select project ID from the Swain backend (requires auth token)",
+    ),
+    swain_connection_id: Optional[int] = typer.Option(
+        None,
+        "--swain-connection-id",
+        help="select connection ID from the Swain backend (requires auth token)",
+    ),
     property: List[str] = typer.Option(
         [],
         "-D",
@@ -1289,6 +1807,8 @@ def gen(
         templates=templates,
         additional_properties=additional_properties,
         generator_arg=generator_arg,
+        swain_project_id=swain_project_id,
+        swain_connection_id=swain_connection_id,
         property=property,
         skip_validate_spec=skip_validate_spec,
         verbose=verbose,

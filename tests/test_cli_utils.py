@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Dict, List
 
 import httpx
 import keyring
@@ -170,12 +171,21 @@ class FakeClient:
     def __exit__(self, *exc):
         return False
 
-    def get(self, url, headers=None):
+    def _next_response(self, url):
         if not self._responses:
             raise AssertionError("unexpected request")
         response = self._responses.pop(0)
         assert response.url == str(url)
-        self.calls.append(str(url))
+        return response
+
+    def get(self, url, headers=None, params=None, json=None):
+        response = self._next_response(url)
+        self.calls.append(("GET", str(url), params, json))
+        return response
+
+    def post(self, url, headers=None, params=None, json=None):
+        response = self._next_response(url)
+        self.calls.append(("POST", str(url), params, json))
         return response
 
 
@@ -203,7 +213,7 @@ def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
         assert data["swagger"] == "2.0"
     finally:
         temp_path.unlink(missing_ok=True)
-    assert calls == [
+    assert [entry[1] for entry in calls] == [
         "https://api.example.com/api/schema-location",
         "https://api.example.com/openapi/custom.json",
     ]
@@ -322,6 +332,8 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
         engine="embedded",
         schema=None,
         crudsql_url="https://api.example.com",
+        swain_project_id=None,
+        swain_connection_id=None,
         out=str(tmp_path / "out"),
         languages=["python"],
         config=None,
@@ -359,6 +371,8 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
         engine="embedded",
         schema=None,
         crudsql_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
         out=str(out_dir),
         languages=["python"],
         config=None,
@@ -373,6 +387,137 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     assert cli.handle_gen(args) == 0
     assert not schema_file.exists()
     assert out_dir.is_dir()
+
+
+def test_fetch_swain_projects_parses_pages(monkeypatch):
+    page1 = FakeResponse(
+        "https://api.example.com/Project",
+        json_data={
+            "data": [{"id": 1, "name": "Alpha"}],
+            "total_pages": 2,
+        },
+        content=b"{}",
+    )
+    page2 = FakeResponse(
+        "https://api.example.com/Project",
+        json_data={
+            "data": [{"id": 2, "name": "Beta"}],
+            "total_pages": 2,
+        },
+        content=b"{}",
+    )
+    calls: List[Any] = []
+
+    def fake_client(**kwargs):
+        return FakeClient([page1, page2], calls)
+
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
+    projects = cli.fetch_swain_projects("https://api.example.com", "token")
+    assert [project.id for project in projects] == [1, 2]
+    assert calls[0][0] == "GET"
+    assert calls[0][2]["page"] == 1
+    assert calls[1][2]["page"] == 2
+
+
+def test_fetch_swain_connections_parses_payload(monkeypatch):
+    response = FakeResponse(
+        "https://api.example.com/Connection/filter",
+        json_data={
+            "data": [
+                {
+                    "id": 55,
+                    "dbname": "analytics",
+                    "driver": "postgres",
+                    "stage": {"name": "prod"},
+                    "project": {"name": "Alpha"},
+                    "current_schema": {
+                        "name": "public",
+                        "current_build": {
+                            "id": 7,
+                            "api_endpoint": "https://build.example.com",
+                        },
+                    },
+                    "api_endpoint": "https://connection.example.com",
+                }
+            ]
+        },
+        content=b"{}",
+    )
+    calls: List[Any] = []
+
+    def fake_client(**kwargs):
+        return FakeClient([response], calls)
+
+    monkeypatch.setattr(cli.httpx, "Client", fake_client)
+    connections = cli.fetch_swain_connections(
+        "https://api.example.com", "token", project_id=1
+    )
+    assert len(connections) == 1
+    conn = connections[0]
+    assert conn.id == 55
+    assert conn.driver == "postgres"
+    assert conn.stage == "prod"
+    assert conn.schema_name == "public"
+    assert conn.build_endpoint == "https://build.example.com"
+    assert calls[0][0] == "POST"
+
+
+def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
+    connection = cli.SwainConnection(
+        id=77,
+        database_name="main-db",
+        driver="postgres",
+        stage="prod",
+        project_name="Alpha",
+        schema_name="public",
+        build_id=12,
+        build_endpoint="https://build.example.com",
+        connection_endpoint=None,
+        raw={"id": 77, "project_id": 99},
+    )
+    schema_file = tmp_path / "swain.json"
+
+    def fake_fetch_schema(conn, token):
+        assert conn.id == connection.id
+        assert token == "token-swain"
+        schema_file.write_text("{}")
+        return schema_file
+
+    captured: Dict[str, Any] = {}
+
+    def fake_run(jar, engine, cmd):
+        captured["cmd"] = cmd
+        return 0
+
+    monkeypatch.setattr(
+        cli, "fetch_swain_connection_by_id", lambda base, token, cid: connection
+    )
+    monkeypatch.setattr(cli, "fetch_swain_connection_schema", fake_fetch_schema)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-swain")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+
+    args = SimpleNamespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url="https://api.example.com",
+        swain_project_id=None,
+        swain_connection_id=connection.id,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert "cmd" in captured
+    assert not schema_file.exists()
 
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
