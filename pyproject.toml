@@ -51,6 +51,17 @@ swain_cli = "swain_cli.cli:main"
 [tool.setuptools.package-data]
 swain_cli = ["vendor/*.jar"]
 
+[tool.setuptools.packages.find]
+include = ["swain_cli*"]
+exclude = [
+  "tests*",
+  "docs*",
+  "build*",
+  "dist*",
+  "sdks*",
+  "examples*",
+]
+
 [project.optional-dependencies]
 dev = [
   "pytest>=7"

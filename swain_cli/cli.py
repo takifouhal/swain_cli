@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import httpx
 import keyring
@@ -34,6 +35,9 @@ ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.2"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
+TENANT_ID_ENV_VAR = "SWAIN_CLI_TENANT_ID"
+TENANT_HEADER_NAME = "X-Tenant-ID"
+TENANT_MANUAL_CHOICE = "__manual__"
 KEYRING_SERVICE = "swain_cli"
 KEYRING_USERNAME = "access_token"
 KEYRING_REFRESH_USERNAME = "refresh_token"
@@ -343,7 +347,9 @@ def crudsql_dynamic_swagger_url(base_url: str) -> str:
     return str(httpx.URL(normalized_base).join("api/dynamic_swagger"))
 
 
-def crudsql_discover_schema_url(base_url: str, token: str) -> str:
+def crudsql_discover_schema_url(
+    base_url: str, token: str, tenant_id: Optional[Union[str, int]] = None
+) -> str:
     normalized_base = base_url.rstrip("/") + "/"
     discovery_url = httpx.URL(normalized_base).join("api/schema-location")
     headers = {
@@ -352,6 +358,9 @@ def crudsql_discover_schema_url(base_url: str, token: str) -> str:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    normalized_tenant = _normalize_tenant_id(tenant_id)
+    if normalized_tenant:
+        headers[TENANT_HEADER_NAME] = normalized_tenant
 
     timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -381,8 +390,10 @@ def crudsql_discover_schema_url(base_url: str, token: str) -> str:
     return str(httpx.URL(normalized_base).join(schema_url.strip()))
 
 
-def fetch_crudsql_schema(base_url: str, token: str) -> Path:
-    schema_url = crudsql_discover_schema_url(base_url, token)
+def fetch_crudsql_schema(
+    base_url: str, token: str, *, tenant_id: Optional[Union[str, int]] = None
+) -> Path:
+    schema_url = crudsql_discover_schema_url(base_url, token, tenant_id)
     log(f"fetching CrudSQL schema from {schema_url}")
     headers = {
         "Accept": "application/json",
@@ -390,6 +401,9 @@ def fetch_crudsql_schema(base_url: str, token: str) -> Path:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    normalized_tenant = _normalize_tenant_id(tenant_id)
+    if normalized_tenant:
+        headers[TENANT_HEADER_NAME] = normalized_tenant
 
     timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -424,17 +438,143 @@ def fetch_crudsql_schema(base_url: str, token: str) -> Path:
 
 
 def _swain_url(base_url: str, path: str) -> httpx.URL:
-    normalized = base_url.rstrip("/") + "/"
-    return httpx.URL(normalized).join(path)
+    normalized_base = base_url.rstrip("/") + "/"
+    base_url_obj = httpx.URL(normalized_base)
+    normalized_path = path.lstrip("/")
+
+    if normalized_path and not normalized_path.startswith("api/"):
+        path_segments = [segment for segment in base_url_obj.path.split("/") if segment]
+        if not any(segment == "api" for segment in path_segments):
+            # Ensure requests target the API prefix even when the base URL omits it.
+            base_url_obj = base_url_obj.join("api/")
+
+    return base_url_obj.join(normalized_path)
 
 
-def _swain_request_headers(token: str) -> Dict[str, str]:
+def _normalize_tenant_id(value: Optional[Union[str, int]]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return str(value)
+
+
+def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+        payload_segment = parts[1]
+        padding = (-len(payload_segment)) % 4
+        padded = payload_segment + ("=" * padding)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(decoded.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+
+
+def _extract_tenant_ids_from_token(token: str) -> List[str]:
+    payload = _decode_jwt_payload(token)
+    if not payload:
+        return []
+
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        normalized = _normalize_tenant_id(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+
+    for key in ("tenant_ids", "tenantIds"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            for entry in value:
+                add(entry)
+
+    for key in (
+        "tenant_id",
+        "tenantId",
+        "accounts_id",
+        "accountsId",
+        "account_id",
+        "accountId",
+    ):
+        add(payload.get(key))
+
+    additional_data = payload.get("additional_data") or payload.get("additionalData")
+    if isinstance(additional_data, dict):
+        for key in ("tenant_id", "tenantId", "accounts_id", "accountsId"):
+            add(additional_data.get(key))
+
+    return candidates
+
+
+def determine_swain_tenant_id(
+    token: str,
+    provided: Optional[Union[str, int]],
+    *,
+    allow_prompt: bool,
+) -> str:
+    explicit = _normalize_tenant_id(provided)
+    if explicit:
+        return explicit
+
+    env_value = _normalize_tenant_id(os.environ.get(TENANT_ID_ENV_VAR))
+    if env_value:
+        log(f"using tenant id {env_value} from {TENANT_ID_ENV_VAR}")
+        return env_value
+
+    candidates = _extract_tenant_ids_from_token(token)
+    if candidates:
+        if len(candidates) == 1:
+            tenant_id = candidates[0]
+            log(f"using tenant id {tenant_id} derived from access token claims")
+            return tenant_id
+        if allow_prompt:
+            choices = [
+                questionary.Choice(title=str(candidate), value=str(candidate))
+                for candidate in candidates
+            ]
+            choices.append(
+                questionary.Choice(
+                    title="Enter tenant ID manually", value=TENANT_MANUAL_CHOICE
+                )
+            )
+            selection = prompt_select(
+                "Select Swain tenant ID",
+                choices=choices,
+            )
+            if selection == TENANT_MANUAL_CHOICE:
+                return prompt_text("Swain tenant ID")
+            return str(selection)
+        raise CLIError(
+            "multiple tenant IDs available; specify --swain-tenant-id or set SWAIN_CLI_TENANT_ID"
+        )
+
+    if allow_prompt:
+        return prompt_text("Swain tenant ID")
+
+    raise CLIError(
+        "Swain tenant ID required; provide --swain-tenant-id or set SWAIN_CLI_TENANT_ID"
+    )
+
+
+def _swain_request_headers(
+    token: str, *, tenant_id: Optional[Union[str, int]] = None
+) -> Dict[str, str]:
     headers = {
         "Accept": "application/json",
         "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    normalized_tenant = _normalize_tenant_id(tenant_id)
+    if normalized_tenant:
+        headers[TENANT_HEADER_NAME] = normalized_tenant
     return headers
 
 
@@ -524,11 +664,12 @@ def fetch_swain_projects(
     base_url: str,
     token: str,
     *,
+    tenant_id: Optional[Union[str, int]] = None,
     page_size: int = 50,
     max_pages: int = 25,
 ) -> List[SwainProject]:
     url = _swain_url(base_url, "Project")
-    headers = _swain_request_headers(token)
+    headers = _swain_request_headers(token, tenant_id=tenant_id)
     timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
     projects: List[SwainProject] = []
     page = 1
@@ -679,12 +820,13 @@ def fetch_swain_connections(
     base_url: str,
     token: str,
     *,
+    tenant_id: Optional[Union[str, int]] = None,
     project_id: Optional[int] = None,
     connection_id: Optional[int] = None,
     page_size: int = 100,
 ) -> List[SwainConnection]:
     url = _swain_url(base_url, "Connection/filter")
-    headers = _swain_request_headers(token)
+    headers = _swain_request_headers(token, tenant_id=tenant_id)
     payload = _connection_filter_payload(
         project_id=project_id, connection_id=connection_id
     )
@@ -728,11 +870,16 @@ def fetch_swain_connections(
 
 
 def fetch_swain_connection_by_id(
-    base_url: str, token: str, connection_id: int
+    base_url: str,
+    token: str,
+    connection_id: int,
+    *,
+    tenant_id: Optional[Union[str, int]] = None,
 ) -> SwainConnection:
     connections = fetch_swain_connections(
         base_url,
         token,
+        tenant_id=tenant_id,
         connection_id=connection_id,
     )
     if not connections:
@@ -751,13 +898,16 @@ def swain_dynamic_swagger_from_connection(connection: SwainConnection) -> str:
 
 
 def fetch_swain_connection_schema(
-    connection: SwainConnection, token: str
+    connection: SwainConnection,
+    token: str,
+    *,
+    tenant_id: Optional[Union[str, int]] = None,
 ) -> Path:
     schema_url = swain_dynamic_swagger_from_connection(connection)
     log(
         f"fetching connection dynamic swagger from {schema_url} (connection {connection.id})"
     )
-    headers = _swain_request_headers(token)
+    headers = _swain_request_headers(token, tenant_id=tenant_id)
     timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         try:
@@ -1059,7 +1209,18 @@ def prompt_text(
     validate: Optional[Callable[[str], Optional[str]]] = None,
     allow_empty: bool = False,
 ) -> str:
-    question = questionary.text(prompt, default=default or "", validate=validate)
+    wrapped_validate: Optional[Callable[[str], Union[bool, str]]]
+    if validate is None:
+        wrapped_validate = None
+    else:
+        def wrapped_validate(value: str) -> Union[bool, str]:
+            verdict = validate(value)
+            return True if verdict is None else verdict
+    question = questionary.text(
+        prompt,
+        default=default or "",
+        validate=wrapped_validate,
+    )
     result = question.ask()
     if result is None:
         raise InteractionAborted()
@@ -1178,8 +1339,21 @@ def handle_gen(args: SimpleNamespace) -> int:
     crudsql_url = getattr(args, "crudsql_url", None)
     swain_project_id = getattr(args, "swain_project_id", None)
     swain_connection_id = getattr(args, "swain_connection_id", None)
+    swain_tenant_id = getattr(args, "swain_tenant_id", None)
     temp_schema: Optional[Path] = None
     selected_connection: Optional[SwainConnection] = None
+
+    tenant_id_cache: Optional[str] = None
+
+    def ensure_tenant_id(token: str) -> str:
+        nonlocal tenant_id_cache
+        if tenant_id_cache is None:
+            tenant_id_cache = determine_swain_tenant_id(
+                token,
+                swain_tenant_id,
+                allow_prompt=False,
+            )
+        return tenant_id_cache
     try:
         if schema_arg:
             schema = schema_arg
@@ -1196,6 +1370,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                 else "fetch the CrudSQL swagger document"
             )
             token = require_auth_token(purpose)
+            tenant_id_value = ensure_tenant_id(token)
             if swain_connection_id or swain_project_id:
                 project_id_value: Optional[int] = None
                 connection_id_value: Optional[int] = None
@@ -1222,7 +1397,10 @@ def handle_gen(args: SimpleNamespace) -> int:
 
                 if connection_id_value is not None:
                     selected_connection = fetch_swain_connection_by_id(
-                        base_url, token, connection_id_value
+                        base_url,
+                        token,
+                        connection_id_value,
+                        tenant_id=tenant_id_value,
                     )
                     if project_id_value is not None:
                         connection_project_id = _safe_int(
@@ -1243,6 +1421,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                     connections = fetch_swain_connections(
                         base_url,
                         token,
+                        tenant_id=tenant_id_value,
                         project_id=project_id_value,
                     )
                     if not connections:
@@ -1259,7 +1438,11 @@ def handle_gen(args: SimpleNamespace) -> int:
                         "--swain-connection-id or --swain-project-id is required when using Swain discovery"
                     )
 
-                temp_schema = fetch_swain_connection_schema(selected_connection, token)
+                temp_schema = fetch_swain_connection_schema(
+                    selected_connection,
+                    token,
+                    tenant_id=tenant_id_value,
+                )
                 schema = str(temp_schema)
                 log(
                     "using Swain connection"
@@ -1268,7 +1451,11 @@ def handle_gen(args: SimpleNamespace) -> int:
                     f" schema: {selected_connection.schema_name or 'unknown'})"
                 )
             else:
-                temp_schema = fetch_crudsql_schema(base_url, token)
+                temp_schema = fetch_crudsql_schema(
+                    base_url,
+                    token,
+                    tenant_id=tenant_id_value,
+                )
                 schema = str(temp_schema)
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1483,6 +1670,7 @@ def run_interactive(args: SimpleNamespace) -> int:
     schema_input: Optional[str] = None
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None
+    tenant_id: Optional[str] = None
 
     try:
         if prompt_confirm("Fetch schema from the Swain backend?", default=True):
@@ -1500,7 +1688,14 @@ def run_interactive(args: SimpleNamespace) -> int:
                 validate=validate_swain_base,
             )
             token = require_auth_token("discover Swain projects and connections")
-            projects = fetch_swain_projects(crudsql_base, token)
+            tenant_id = determine_swain_tenant_id(
+                token,
+                tenant_id,
+                allow_prompt=True,
+            )
+            projects = fetch_swain_projects(
+                crudsql_base, token, tenant_id=tenant_id
+            )
             if not projects:
                 raise CLIError("no projects available on the Swain backend")
             if len(projects) == 1:
@@ -1523,7 +1718,10 @@ def run_interactive(args: SimpleNamespace) -> int:
                 swain_project = project_options[selected_project_id]
 
             connections = fetch_swain_connections(
-                crudsql_base, token, project_id=swain_project.id
+                crudsql_base,
+                token,
+                tenant_id=tenant_id,
+                project_id=swain_project.id,
             )
             if not connections:
                 raise CLIError(
@@ -1587,87 +1785,19 @@ def run_interactive(args: SimpleNamespace) -> int:
         )
         languages = [lang.lower() for lang in parse_languages(languages_raw)]
 
-        def validate_optional_file(value: str) -> Optional[str]:
-            if not value:
-                return None
-            path = Path(value).expanduser()
-            if not path.exists():
-                return f"config file {path} does not exist"
-            if not path.is_file():
-                return f"config path {path} is not a file"
-            return None
+        config_value = None
 
-        config_input = prompt_text(
-            "Generator config file (optional)",
-            default="",
-            validate=validate_optional_file,
-            allow_empty=True,
-        )
-        config_value = str(Path(config_input).expanduser()) if config_input else None
-
-        def validate_optional_dir(value: str) -> Optional[str]:
-            if not value:
-                return None
-            path = Path(value).expanduser()
-            if not path.exists():
-                return f"templates directory {path} does not exist"
-            if not path.is_dir():
-                return f"templates path {path} is not a directory"
-            return None
-
-        templates_input = prompt_text(
-            "Custom templates directory (optional)",
-            default="",
-            validate=validate_optional_dir,
-            allow_empty=True,
-        )
-        templates_value = (
-            str(Path(templates_input).expanduser()) if templates_input else None
-        )
+        templates_value = None
 
         additional_properties: List[str] = []
-        if prompt_confirm("Add additional properties (-p key=value)?", default=False):
-            log("enter key=value pairs; leave blank when finished")
-            while True:
-                entry = prompt_text(
-                    "Additional property",
-                    default="",
-                    allow_empty=True,
-                )
-                if not entry:
-                    break
-                if "=" not in entry:
-                    log_error("enter values in key=value format")
-                    continue
-                additional_properties.append(entry)
 
         sys_props: List[str] = []
-        if prompt_confirm("Add system properties (-D key=value)?", default=False):
-            log("enter key=value pairs; leave blank when finished")
-            while True:
-                entry = prompt_text(
-                    "System property",
-                    default="",
-                    allow_empty=True,
-                )
-                if not entry:
-                    break
-                sys_props.append(entry)
 
         generator_args: List[str] = []
-        if prompt_confirm("Add raw OpenAPI Generator args?", default=False):
-            log("enter arguments exactly as OpenAPI Generator expects; blank to finish")
-            while True:
-                entry = prompt_text("Generator argument", default="", allow_empty=True)
-                if not entry:
-                    break
-                generator_args.append(entry)
 
-        engine_choice = (
-            "embedded" if prompt_confirm("Use embedded Java runtime?", default=True) else "system"
-        )
-        skip_validate = prompt_confirm("Skip OpenAPI spec validation?", default=False)
-        verbose = prompt_confirm("Enable verbose generator output?", default=False)
+        engine_choice = "embedded"
+        skip_validate = False
+        verbose = False
 
     except InteractionAborted:
         log_error("interactive session cancelled")
@@ -1699,9 +1829,13 @@ def run_interactive(args: SimpleNamespace) -> int:
             f" ({swain_connection.database_name or 'connection'})"
         )
         log(f"  dynamic swagger: {schema_display}")
+        if tenant_id:
+            log(f"  tenant: {tenant_id}")
     elif crudsql_base:
         log(f"  crudsql base: {crudsql_base}")
         log(f"  dynamic swagger: {schema_display}")
+        if tenant_id:
+            log(f"  tenant: {tenant_id}")
     else:
         log(f"  schema: {schema_display}")
     log(f"  output: {out_value}")
@@ -1724,6 +1858,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     if args.generator_version:
         command_preview.extend(["--generator-version", args.generator_version])
     command_preview.append("gen")
+    if tenant_id:
+        command_preview.extend(["--swain-tenant-id", tenant_id])
     if swain_connection and swain_project:
         if crudsql_base and crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
             command_preview.extend(["--crudsql-url", crudsql_base])
@@ -1767,6 +1903,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         crudsql_url=crudsql_base,
         swain_project_id=swain_project.id if swain_project else None,
         swain_connection_id=swain_connection.id if swain_connection else None,
+        swain_tenant_id=tenant_id,
         out=out_value,
         languages=languages,
         config=config_value,
@@ -1862,6 +1999,11 @@ def gen(
         "--generator-arg",
         help="raw OpenAPI Generator argument (repeatable)",
     ),
+    swain_tenant_id: Optional[str] = typer.Option(
+        None,
+        "--swain-tenant-id",
+        help=f"Tenant ID for Swain API requests (or set {TENANT_ID_ENV_VAR})",
+    ),
     swain_project_id: Optional[int] = typer.Option(
         None,
         "--swain-project-id",
@@ -1907,6 +2049,7 @@ def gen(
         templates=templates,
         additional_properties=additional_properties,
         generator_arg=generator_arg,
+        swain_tenant_id=swain_tenant_id,
         swain_project_id=swain_project_id,
         swain_connection_id=swain_connection_id,
         property=property,

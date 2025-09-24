@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -180,13 +181,41 @@ class FakeClient:
 
     def get(self, url, headers=None, params=None, json=None):
         response = self._next_response(url)
-        self.calls.append(("GET", str(url), params, json))
+        self.calls.append(("GET", str(url), headers or {}, params, json))
         return response
 
     def post(self, url, headers=None, params=None, json=None):
         response = self._next_response(url)
-        self.calls.append(("POST", str(url), params, json))
+        self.calls.append(("POST", str(url), headers or {}, params, json))
         return response
+
+
+def make_jwt(payload: Dict[str, Any]) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    signature = base64.urlsafe_b64encode(b"signature").decode().rstrip("=")
+    return f"{header}.{body}.{signature}"
+
+
+def test_determine_swain_tenant_id_env(monkeypatch):
+    token = make_jwt({"tenant_ids": [1, 2, 3]})
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "600")
+    result = cli.determine_swain_tenant_id(token, None, allow_prompt=False)
+    assert result == "600"
+
+
+def test_determine_swain_tenant_id_single_claim(monkeypatch):
+    token = make_jwt({"tenant_ids": [987]})
+    monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
+    result = cli.determine_swain_tenant_id(token, None, allow_prompt=False)
+    assert result == "987"
+
+
+def test_determine_swain_tenant_id_multiple_claims_requires_choice(monkeypatch):
+    token = make_jwt({"tenant_ids": [10, 20]})
+    monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
+    with pytest.raises(cli.CLIError):
+        cli.determine_swain_tenant_id(token, None, allow_prompt=False)
 
 
 def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
@@ -207,7 +236,11 @@ def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
         return FakeClient([schema], calls)
 
     monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    temp_path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    temp_path = cli.fetch_crudsql_schema(
+        "https://api.example.com",
+        "token123",
+        tenant_id="42",
+    )
     try:
         data = json.loads(temp_path.read_text())
         assert data["swagger"] == "2.0"
@@ -217,6 +250,12 @@ def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
         "https://api.example.com/api/schema-location",
         "https://api.example.com/openapi/custom.json",
     ]
+    discovery_headers = calls[0][2]
+    assert discovery_headers["Authorization"] == "Bearer token123"
+    assert discovery_headers["X-Tenant-ID"] == "42"
+    schema_headers = calls[1][2]
+    assert schema_headers["Authorization"] == "Bearer token123"
+    assert schema_headers["X-Tenant-ID"] == "42"
 
 
 def test_fetch_crudsql_schema_http_error(monkeypatch):
@@ -232,7 +271,11 @@ def test_fetch_crudsql_schema_http_error(monkeypatch):
 
     monkeypatch.setattr(cli.httpx, "Client", fake_client)
     with pytest.raises(cli.CLIError) as excinfo:
-        cli.fetch_crudsql_schema("https://api.example.com", "token123")
+        cli.fetch_crudsql_schema(
+            "https://api.example.com",
+            "token123",
+            tenant_id="88",
+        )
     assert "401" in str(excinfo.value)
 
 
@@ -257,7 +300,11 @@ def test_fetch_crudsql_schema_falls_back(monkeypatch):
         return FakeClient([schema])
 
     monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    temp_path = cli.fetch_crudsql_schema("https://api.example.com", "token123")
+    temp_path = cli.fetch_crudsql_schema(
+        "https://api.example.com",
+        "token123",
+        tenant_id="55",
+    )
     try:
         assert temp_path.read_text() == "{}"
     finally:
@@ -286,7 +333,7 @@ def test_read_login_token_no_prompt(monkeypatch):
 
 def test_swain_login_with_credentials_success(monkeypatch):
     response = FakeResponse(
-        "https://api.example.com/auth/login",
+        "https://api.example.com/api/auth/login",
         json_data={"token": "abc", "refresh_token": "refresh"},
         content=b"{}",
     )
@@ -398,9 +445,12 @@ def test_auth_status_prefers_env(monkeypatch, capfd):
 def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
 
-    def fake_fetch(url, token):
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "101")
+
+    def fake_fetch(url, token, tenant_id=None):
         assert url == "https://api.example.com"
         assert token == "token-abc"
+        assert tenant_id == "101"
         schema_file.write_text("{}")
         return schema_file
 
@@ -431,6 +481,7 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
         property=[],
         skip_validate_spec=False,
         verbose=False,
+        swain_tenant_id=None,
     )
 
     assert cli.handle_gen(args) == 0
@@ -442,9 +493,12 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
 def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
 
-    def fake_fetch(url, token):
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "202")
+
+    def fake_fetch(url, token, tenant_id=None):
         assert url == cli.DEFAULT_CRUDSQL_BASE_URL
         assert token == "token-default"
+        assert tenant_id == "202"
         schema_file.write_text("{}")
         return schema_file
 
@@ -467,6 +521,7 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
         templates=None,
         additional_properties=None,
         generator_arg=None,
+        swain_tenant_id=None,
         property=[],
         skip_validate_spec=False,
         verbose=False,
@@ -479,7 +534,7 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
 
 def test_fetch_swain_projects_parses_pages(monkeypatch):
     page1 = FakeResponse(
-        "https://api.example.com/Project",
+        "https://api.example.com/api/Project",
         json_data={
             "data": [{"id": 1, "name": "Alpha"}],
             "total_pages": 2,
@@ -487,7 +542,7 @@ def test_fetch_swain_projects_parses_pages(monkeypatch):
         content=b"{}",
     )
     page2 = FakeResponse(
-        "https://api.example.com/Project",
+        "https://api.example.com/api/Project",
         json_data={
             "data": [{"id": 2, "name": "Beta"}],
             "total_pages": 2,
@@ -500,16 +555,22 @@ def test_fetch_swain_projects_parses_pages(monkeypatch):
         return FakeClient([page1, page2], calls)
 
     monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    projects = cli.fetch_swain_projects("https://api.example.com", "token")
+    projects = cli.fetch_swain_projects(
+        "https://api.example.com",
+        "token",
+        tenant_id="999",
+    )
     assert [project.id for project in projects] == [1, 2]
     assert calls[0][0] == "GET"
-    assert calls[0][2]["page"] == 1
-    assert calls[1][2]["page"] == 2
+    assert calls[0][3]["page"] == 1
+    assert calls[1][3]["page"] == 2
+    assert calls[0][2]["X-Tenant-ID"] == "999"
+    assert calls[1][2]["X-Tenant-ID"] == "999"
 
 
 def test_fetch_swain_connections_parses_payload(monkeypatch):
     response = FakeResponse(
-        "https://api.example.com/Connection/filter",
+        "https://api.example.com/api/Connection/filter",
         json_data={
             "data": [
                 {
@@ -538,7 +599,10 @@ def test_fetch_swain_connections_parses_payload(monkeypatch):
 
     monkeypatch.setattr(cli.httpx, "Client", fake_client)
     connections = cli.fetch_swain_connections(
-        "https://api.example.com", "token", project_id=1
+        "https://api.example.com",
+        "token",
+        tenant_id="777",
+        project_id=1,
     )
     assert len(connections) == 1
     conn = connections[0]
@@ -548,6 +612,7 @@ def test_fetch_swain_connections_parses_payload(monkeypatch):
     assert conn.schema_name == "public"
     assert conn.build_endpoint == "https://build.example.com"
     assert calls[0][0] == "POST"
+    assert calls[0][2]["X-Tenant-ID"] == "777"
 
 
 def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
@@ -565,9 +630,10 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
     )
     schema_file = tmp_path / "swain.json"
 
-    def fake_fetch_schema(conn, token):
+    def fake_fetch_schema(conn, token, tenant_id=None):
         assert conn.id == connection.id
         assert token == "token-swain"
+        assert tenant_id == "303"
         schema_file.write_text("{}")
         return schema_file
 
@@ -577,8 +643,16 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         captured["cmd"] = cmd
         return 0
 
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "303")
+
+    def fake_fetch_connection(base, token, cid, tenant_id=None):
+        assert tenant_id == "303"
+        return connection
+
     monkeypatch.setattr(
-        cli, "fetch_swain_connection_by_id", lambda base, token, cid: connection
+        cli,
+        "fetch_swain_connection_by_id",
+        fake_fetch_connection,
     )
     monkeypatch.setattr(cli, "fetch_swain_connection_schema", fake_fetch_schema)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-swain")
@@ -592,6 +666,7 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         crudsql_url="https://api.example.com",
         swain_project_id=None,
         swain_connection_id=connection.id,
+        swain_tenant_id=None,
         out=str(tmp_path / "out"),
         languages=["python"],
         config=None,
@@ -609,26 +684,13 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
 
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
-    confirm_values = iter(
-        [
-            False,  # fetch from CrudSQL? no
-            False,  # additional properties
-            False,  # system properties
-            False,  # raw generator args
-            True,  # use embedded runtime
-            False,  # skip validation
-            False,  # verbose
-            False,  # run now
-        ]
-    )
+    confirm_values = iter([False, False])
 
     text_values = iter(
         [
             "http://example.com/openapi.yaml",
             "sdks",
             "python",
-            "",
-            "",
         ]
     )
 
@@ -648,7 +710,11 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
     monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
-    monkeypatch.setattr(cli, "fetch_crudsql_schema", lambda base, token: Path("schema.json"))
+    monkeypatch.setattr(
+        cli,
+        "fetch_crudsql_schema",
+        lambda base, token, tenant_id=None: Path("schema.json"),
+    )
     monkeypatch.setattr(cli, "handle_gen", lambda args: 0)
 
     result = cli.handle_interactive(SimpleNamespace(generator_version=None))
@@ -656,3 +722,79 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
     out, err = capfd.readouterr()
     assert "interactive SDK generation wizard" in out
     assert err == ""
+
+
+def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
+    project = cli.SwainProject(id=102, name="Project", raw={})
+    connection = cli.SwainConnection(
+        id=110,
+        database_name="main-db",
+        driver="postgres",
+        stage="prod",
+        project_name="Project",
+        schema_name="public",
+        build_id=12,
+        build_endpoint="https://connection.example.com",
+        connection_endpoint=None,
+        raw={"id": 110, "project_id": 102},
+    )
+
+    confirm_values = iter([True, True])
+
+    text_values = iter(
+        [
+            "https://api.example.com",
+            "sdks",
+            "go",
+        ]
+    )
+
+    def fake_confirm(prompt, default=True):
+        return next(confirm_values)
+
+    def fake_text(prompt, default=None, validate=None, allow_empty=False):
+        value = next(text_values)
+        if callable(validate):
+            error = validate(value)
+            if error:
+                pytest.fail(f"validation failed unexpectedly: {error}")
+        return value
+
+    monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
+    monkeypatch.setattr(cli, "prompt_text", fake_text)
+    monkeypatch.setattr(cli, "prompt_select", lambda prompt, choices: choices[0].value)
+    monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
+
+    def fake_determine(token, provided, *, allow_prompt):
+        assert token == "token-xyz"
+        assert allow_prompt is True
+        return "14"
+
+    monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_projects",
+        lambda base, token, tenant_id=None: [project],
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connections",
+        lambda base, token, tenant_id=None, project_id=None: [connection],
+    )
+
+    captured: Dict[str, Any] = {}
+
+    def fake_handle_gen(args):
+        captured["args"] = args
+        return 0
+
+    monkeypatch.setattr(cli, "handle_gen", fake_handle_gen)
+
+    result = cli.handle_interactive(SimpleNamespace(generator_version=None))
+    assert result == 0
+    assert "args" in captured
+    passed_args = captured["args"]
+    assert passed_args.swain_tenant_id == "14"
+    assert passed_args.swain_project_id == project.id
+    assert passed_args.swain_connection_id == connection.id
