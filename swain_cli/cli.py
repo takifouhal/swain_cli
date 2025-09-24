@@ -86,12 +86,12 @@ JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
     ),
     ("macos", "x86_64"): JREAsset(
         "swain_cli-jre-macos-x86_64.tar.gz",
-        "eaf80148765e13e846371eac654fbc8c109f8cf5d369114fd90d944c384e0535",
+        "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6",
         "swain_cli-jre-macos-x86_64.tar.gz.sha256",
     ),
     ("macos", "arm64"): JREAsset(
         "swain_cli-jre-macos-arm64.tar.gz",
-        "48ae1d63c47e9ade617e2d321889b2675b755c1d2b7db465601b47c0823cff9d",
+        "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964",
         "swain_cli-jre-macos-arm64.tar.gz.sha256",
     ),
     ("windows", "x86_64"): JREAsset(
@@ -186,7 +186,8 @@ class HTTPXDownloader:
         url: str,
         output_file: str,
         pooch_obj: pooch.Pooch,
-        check_only: bool,
+        check_only: bool = False,
+        **_: Any,
     ) -> None:
         timeout = httpx.Timeout(self.timeout, connect=self.timeout)
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -263,6 +264,10 @@ def downloads_dir() -> Path:
 
 def vendor_jar_path() -> Path:
     return Path(__file__).resolve().parent / "vendor" / VENDOR_JAR_NAME
+
+
+def assets_dir() -> Path:
+    return Path(__file__).resolve().parent / "assets"
 
 
 def find_vendor_jar() -> Optional[Path]:
@@ -988,22 +993,80 @@ def resolve_asset_sha256(asset: JREAsset) -> str:
     return parse_checksum_file(checksum_path)
 
 
+def _bundled_asset_path(name: str) -> Optional[Path]:
+    package_assets = assets_dir() / name
+    if package_assets.exists():
+        return package_assets
+    project_root_candidate = Path(__file__).resolve().parent.parent / name
+    if project_root_candidate.exists():
+        return project_root_candidate
+    return None
+
+
+def _sha256_digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _verify_sha256(path: Path, expected: Optional[str]) -> None:
+    if not expected:
+        return
+    digest = _sha256_digest(path)
+    if digest.lower() != expected.lower():
+        raise CLIError(
+            f"SHA-256 mismatch for {path.name}; expected {expected}, got {digest}"
+        )
+
+
 def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False) -> Path:
     downloads = downloads_dir()
     target = downloads / asset_name
     if force and target.exists():
         target.unlink()
+    if target.exists() and not force:
+        try:
+            _verify_sha256(target, sha256)
+        except CLIError:
+            target.unlink()
+        else:
+            return target
+
+    bundled = _bundled_asset_path(asset_name)
+    if bundled:
+        _verify_sha256(bundled, sha256)
+        if bundled.resolve() != target.resolve():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(bundled, target)
+        return target
+
     known_hash = f"sha256:{sha256}" if sha256 else None
-    return Path(
-        pooch.retrieve(
-            url=f"{ASSET_BASE}/{asset_name}",
-            path=downloads,
-            fname=asset_name,
-            known_hash=known_hash,
-            downloader=HTTPX_DOWNLOADER,
-            progressbar=False,
+    try:
+        return Path(
+            pooch.retrieve(
+                url=f"{ASSET_BASE}/{asset_name}",
+                path=downloads,
+                fname=asset_name,
+                known_hash=known_hash,
+                downloader=HTTPX_DOWNLOADER,
+                progressbar=False,
+            )
         )
-    )
+    except httpx.HTTPError as exc:
+        bundled = _bundled_asset_path(asset_name)
+        if bundled:
+            _verify_sha256(bundled, sha256)
+            if bundled.resolve() != target.resolve():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(bundled, target)
+            return target
+        raise CLIError(
+            f"failed to download embedded JRE asset {asset_name}: {exc}"
+        ) from exc
 
 
 def ensure_embedded_jre(force: bool = False) -> Path:

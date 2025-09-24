@@ -49,7 +49,7 @@ Repository = "https://github.com/takifouhal/swain_cli"
 swain_cli = "swain_cli.cli:main"
 
 [tool.setuptools.package-data]
-swain_cli = ["vendor/*.jar"]
+swain_cli = ["vendor/*.jar", "assets/*"]
 
 [tool.setuptools.packages.find]
 include = ["swain_cli*"]
