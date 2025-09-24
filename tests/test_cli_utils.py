@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import httpx
 import keyring
@@ -456,9 +456,10 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_run(jar, engine, cmd):
+    def fake_run(jar, engine, cmd, java_opts):
         captured["cmd"] = cmd
-        return 0
+        captured["java_opts"] = java_opts
+        return 0, ""
 
     monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-abc")
@@ -486,6 +487,7 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
 
     assert cli.handle_gen(args) == 0
     assert "cmd" in captured
+    assert captured.get("java_opts") == [cli.DEFAULT_JAVA_HEAP_OPTION]
     assert not schema_file.exists()
     assert os.path.isdir(args.out)
 
@@ -505,7 +507,11 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-default")
     monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(cli, "run_openapi_generator", lambda jar, engine, cmd: 0)
+    monkeypatch.setattr(
+        cli,
+        "run_openapi_generator",
+        lambda jar, engine, cmd, java_opts: (0, ""),
+    )
 
     out_dir = tmp_path / "out"
     args = SimpleNamespace(
@@ -639,9 +645,10 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
 
     captured: Dict[str, Any] = {}
 
-    def fake_run(jar, engine, cmd):
+    def fake_run(jar, engine, cmd, java_opts):
         captured["cmd"] = cmd
-        return 0
+        captured["java_opts"] = java_opts
+        return 0, ""
 
     monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "303")
 
@@ -680,8 +687,58 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
 
     assert cli.handle_gen(args) == 0
     assert "cmd" in captured
+    assert captured.get("java_opts") == [cli.DEFAULT_JAVA_HEAP_OPTION]
     assert not schema_file.exists()
 
+
+def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text("{}")
+
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "999")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token" )
+    monkeypatch.setattr(
+        cli,
+        "fetch_crudsql_schema",
+        lambda base, token, tenant_id=None: schema_file,
+    )
+
+    calls: List[Tuple[List[str], int]] = []
+
+    def fake_run(jar, engine, cmd, java_opts):
+        call_index = len(calls)
+        if call_index == 0:
+            assert java_opts == [cli.DEFAULT_JAVA_HEAP_OPTION]
+            calls.append((java_opts, call_index))
+            return 1, "java.lang.OutOfMemoryError"
+        assert java_opts == [cli.FALLBACK_JAVA_HEAP_OPTION]
+        calls.append((java_opts, call_index))
+        return 0, ""
+
+    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+
+    args = SimpleNamespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url="https://api.example.com",
+        swain_project_id=None,
+        swain_connection_id=None,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+        swain_tenant_id=None,
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert len(calls) == 2
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
     confirm_values = iter([False, False])

@@ -41,6 +41,10 @@ TENANT_MANUAL_CHOICE = "__manual__"
 KEYRING_SERVICE = "swain_cli"
 KEYRING_USERNAME = "access_token"
 KEYRING_REFRESH_USERNAME = "refresh_token"
+JAVA_OPTS_ENV_VAR = "SWAIN_CLI_JAVA_OPTS"
+DEFAULT_JAVA_HEAP_OPTION = "-Xmx2g"
+FALLBACK_JAVA_HEAP_OPTION = "-Xmx4g"
+OOM_MARKERS = ("OutOfMemoryError", "GC overhead limit exceeded")
 DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
@@ -131,6 +135,12 @@ class AuthState:
 @dataclass
 class CLIContext:
     generator_version: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ResolvedJavaOptions:
+    options: List[str]
+    provided: bool
 
 
 @dataclass(frozen=True)
@@ -1229,32 +1239,65 @@ def ensure_generator_jar(version: str) -> Path:
     return target
 
 
-def run_openapi_generator(jar: Path, engine: str, generator_args: Sequence[str]) -> int:
+def resolve_java_opts(cli_opts: Sequence[str]) -> ResolvedJavaOptions:
+    result: List[str] = []
+    env_opts = os.environ.get(JAVA_OPTS_ENV_VAR)
+    env_provided = bool(env_opts)
+    if env_opts:
+        result.extend(shlex.split(env_opts))
+    cli_provided = bool(cli_opts)
+    result.extend(cli_opts)
+    provided = env_provided or cli_provided
+    if not result:
+        result.append(DEFAULT_JAVA_HEAP_OPTION)
+    return ResolvedJavaOptions(result, provided)
+
+
+def run_openapi_generator(
+    jar: Path,
+    engine: str,
+    generator_args: Sequence[str],
+    java_opts: Sequence[str],
+) -> Tuple[int, str]:
     if engine not in {"embedded", "system"}:
         raise CLIError(f"unknown engine '{engine}'")
+    java_options = list(java_opts)
     if engine == "embedded":
         runtime_dir = ensure_embedded_jre()
         java_exec = find_embedded_java(runtime_dir)
         if not java_exec:
             raise CLIError("embedded JRE is not installed; run 'swain_cli engine install-jre'")
-        cmd = [str(java_exec), "-jar", str(jar), *generator_args]
+        cmd = [str(java_exec), *java_options, "-jar", str(jar), *generator_args]
         env = os.environ.copy()
         env["JAVA_HOME"] = str(runtime_dir)
     else:
         java_exec = shutil.which("java")
         if not java_exec:
             raise CLIError("java executable not found in PATH; install Java or use embedded engine")
-        cmd = [java_exec, "-jar", str(jar), *generator_args]
+        cmd = [java_exec, *java_options, "-jar", str(jar), *generator_args]
         env = os.environ.copy()
     log(f"exec {' '.join(cmd)}")
-    proc = subprocess.Popen(cmd, env=env)
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    combined_output: List[str] = []
     try:
-        proc.communicate()
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            combined_output.append(line)
+        proc.stdout.close()
+        proc.wait()
     except KeyboardInterrupt:
         proc.terminate()
         proc.wait()
         raise
-    return proc.returncode
+    return proc.returncode, "".join(combined_output)
 
 
 def is_url(path: str) -> bool:
@@ -1525,15 +1568,33 @@ def handle_gen(args: SimpleNamespace) -> int:
         languages = args.languages
         if not languages:
             raise CLIError("at least one --lang is required")
+        resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
+        java_opts = list(resolved_java_opts.options)
+        log(f"java options: {format_cli_command(java_opts)}")
+        used_default_opts = not resolved_java_opts.provided
         for lang in languages:
             resolved_lang, target_dir, cmd = build_generate_command(
                 schema, lang, args, out_dir
             )
             log(f"generating {resolved_lang} into {target_dir}")
-            rc = run_openapi_generator(jar, engine, cmd)
+            rc, output = run_openapi_generator(jar, engine, cmd, java_opts)
+            if (
+                rc != 0
+                and used_default_opts
+                and java_opts == resolved_java_opts.options
+                and any(marker in output for marker in OOM_MARKERS)
+            ):
+                java_opts = [FALLBACK_JAVA_HEAP_OPTION]
+                used_default_opts = False
+                log(
+                    "detected OutOfMemoryError; retrying"
+                    f" with java options: {format_cli_command(java_opts)}"
+                )
+                rc, output = run_openapi_generator(jar, engine, cmd, java_opts)
             if rc != 0:
                 log_error(f"generation failed for {resolved_lang} (exit code {rc})")
                 return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+            resolved_java_opts = ResolvedJavaOptions(java_opts, provided=True)
     finally:
         if temp_schema:
             temp_schema.unlink(missing_ok=True)
@@ -1572,7 +1633,10 @@ def list_cached_jars() -> List[str]:
 
 def handle_list_generators(args: SimpleNamespace) -> int:
     jar = resolve_generator_jar(args.generator_version)
-    rc = run_openapi_generator(jar, args.engine, ["list"])
+    resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
+    java_opts = resolved_java_opts.options
+    log(f"java options: {format_cli_command(java_opts)}")
+    rc, _ = run_openapi_generator(jar, args.engine, ["list"], java_opts)
     if rc != 0:
         log_error("openapi-generator list failed")
         return rc if rc != 0 else EXIT_CODE_SUBPROCESS
@@ -1916,6 +1980,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     log(f"  engine: {engine_choice}")
     log(f"  skip validate: {skip_validate}")
     log(f"  verbose: {verbose}")
+    java_preview_opts = resolve_java_opts([]).options
+    log(f"  java options: {format_cli_command(java_preview_opts)}")
 
     command_preview: List[str] = ["swain_cli"]
     if args.generator_version:
@@ -1973,6 +2039,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         templates=templates_value,
         additional_properties=additional_properties,
         generator_arg=generator_args,
+        java_opts=[],
         property=sys_props,
         skip_validate_spec=skip_validate,
         verbose=verbose,
@@ -2024,6 +2091,7 @@ def list_generators(
     args = SimpleNamespace(
         generator_version=ctx.obj.generator_version,
         engine=engine.lower(),
+        java_opts=[],
     )
     try:
         rc = handle_list_generators(args)
@@ -2061,6 +2129,11 @@ def gen(
         [],
         "--generator-arg",
         help="raw OpenAPI Generator argument (repeatable)",
+    ),
+    java_opt: List[str] = typer.Option(
+        [],
+        "--java-opt",
+        help="JVM option passed to the OpenAPI Generator (repeatable)",
     ),
     swain_tenant_id: Optional[str] = typer.Option(
         None,
@@ -2112,6 +2185,7 @@ def gen(
         templates=templates,
         additional_properties=additional_properties,
         generator_arg=generator_arg,
+        java_opts=java_opt,
         swain_tenant_id=swain_tenant_id,
         swain_project_id=swain_project_id,
         swain_connection_id=swain_connection_id,

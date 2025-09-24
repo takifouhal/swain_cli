@@ -39,6 +39,7 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 ## Command overview
 - `swain_cli gen` — generate one or more SDKs; accepts the same configuration flags as OpenAPI Generator (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options. By default swain_cli pulls the CrudSQL dynamic swagger from `https://api.swain.technology`; override with `--crudsql-url` or provide `-i/--schema` to use a local file/URL instead.
   - Add `--swain-project-id` and `--swain-connection-id` to resolve the schema from a specific Swain project/connection after authenticating. When these flags are present swain_cli fetches the connection's current build, resolves the deployed endpoint, and downloads `/api/dynamic_swagger` automatically.
+  - JVM tuning: swain_cli launches OpenAPI Generator with `-Xmx2g` by default and automatically retries once with `-Xmx4g` when it detects a Java `OutOfMemoryError`. Append or override JVM arguments with repeatable `--java-opt` flags (for example `--java-opt -Xmx4g --java-opt -Xms512m`) or export `SWAIN_CLI_JAVA_OPTS` for automation.
 - `swain_cli interactive` — answer a short Q&A and swain_cli assembles (and optionally runs) the matching `swain_cli gen` command
 - `swain_cli list-generators` — enumerate supported generators; add `--engine system` to check a local Java installation
 - `swain_cli doctor` — print environment details, cache paths, installed JREs, and whether the vendor JAR is available
@@ -142,6 +143,7 @@ Use the `auth` subcommands to prime swain_cli with credentials for the hosted pl
 - **Download failures**: Check your proxy/firewall. You can download the JRE artifact manually from the GitHub release and place it under the cache path shown by `swain_cli doctor`.
 - **Missing generators**: `swain_cli list-generators --engine system` verifies what your system Java installation provides. If you updated OpenAPI Generator via `swain_cli engine update-jar`, rerun `list-generators` to ensure the new jar is active.
 - **Cache cleanup**: Delete the cache directory printed by `swain_cli doctor` to force a clean fetch of the runtime and JAR.
+- **OpenAPI Generator `OutOfMemoryError`**: The CLI defaults to `-Xmx2g` and will retry once with `-Xmx4g` automatically. For consistently large specs increase memory via repeatable `--java-opt` flags (e.g. `--java-opt -Xmx6g`) or set `SWAIN_CLI_JAVA_OPTS="-Xmx6g"` before running `swain_cli gen`.
 
 ## Contributing
 1. Create a virtual environment (`python -m venv .venv`) and activate it.
