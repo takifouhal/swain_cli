@@ -1472,10 +1472,11 @@ def interactive_auth_setup() -> None:
         return
     else:
         log("no authentication token configured.")
-        if not prompt_confirm("Add an access token before continuing?", default=True):
+        if not prompt_confirm("Sign in before continuing?", default=True):
             raise CLIError("authentication token required; run 'swain_cli auth login'")
-    token = obtain_token_from_user(allow_reuse=False)
-    persist_auth_token(token)
+    args = SimpleNamespace(username=None, password=None, auth_base_url=None)
+    token = read_login_token(args)
+    persist_auth_token(token, getattr(args, "login_refresh_token", None))
 
 
 def guess_default_schema() -> Optional[Path]:
@@ -1827,48 +1828,28 @@ def handle_engine_use_embedded(_: SimpleNamespace) -> int:
 
 
 def read_login_token(args: SimpleNamespace) -> str:
-    if getattr(args, "token", None):
-        token = args.token.strip()
-        if not token:
-            raise CLIError("--token was provided but is empty")
-        return token
-    if getattr(args, "stdin", False):
-        data = sys.stdin.read().strip()
-        if not data:
-            raise CLIError("no token received on stdin")
-        return data
-    prompt_credentials = bool(getattr(args, "credentials", False))
     username = getattr(args, "username", None)
     password = getattr(args, "password", None)
     auth_base = getattr(args, "auth_base_url", None) or DEFAULT_CRUDSQL_BASE_URL
-    if username or password or prompt_credentials:
-        if not username:
-            username = prompt_text("Username or email")
-        if password is None:
-            password = prompt_password("Password")
-        login_payload = swain_login_with_credentials(auth_base, username, password)
-        token_value = _safe_str(login_payload.get("token"))
-        if not token_value:
-            raise CLIError("credential login did not return an access token")
-        refresh_value = _safe_str(
-            login_payload.get("refresh_token")
-            or login_payload.get("refreshToken")
-            or login_payload.get("refresh-token")
-        )
-        setattr(args, "login_response", login_payload)
-        setattr(args, "login_refresh_token", refresh_value)
-        return token_value
-    env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
-    if env_token:
-        return env_token
-    if getattr(args, "no_prompt", False):
-        raise CLIError(
-            "no token provided; supply --token, --stdin, or set SWAIN_CLI_AUTH_TOKEN"
-        )
-    try:
-        return obtain_token_from_user(allow_reuse=False)
-    except InteractionAborted as exc:
-        raise CLIError("login cancelled") from exc
+
+    if not username:
+        username = prompt_text("Username or email")
+    if password is None:
+        password = prompt_password("Password")
+
+    login_payload = swain_login_with_credentials(auth_base, username, password)
+    token_value = _safe_str(login_payload.get("token"))
+    if not token_value:
+        raise CLIError("credential login did not return an access token")
+
+    refresh_value = _safe_str(
+        login_payload.get("refresh_token")
+        or login_payload.get("refreshToken")
+        or login_payload.get("refresh-token")
+    )
+    setattr(args, "login_response", login_payload)
+    setattr(args, "login_refresh_token", refresh_value)
+    return token_value
 
 
 def handle_auth_login(args: SimpleNamespace) -> int:
@@ -2348,17 +2329,6 @@ def interactive(
 
 @auth_app.command("login")
 def auth_login(
-    token: Optional[str] = typer.Option(None, "--token", help="access token value"),
-    stdin: bool = typer.Option(
-        False,
-        "--stdin",
-        help="read the access token from standard input",
-    ),
-    no_prompt: bool = typer.Option(
-        False,
-        "--no-prompt",
-        help="fail instead of prompting when no token is provided",
-    ),
     username: Optional[str] = typer.Option(
         None,
         "--username",
@@ -2368,12 +2338,7 @@ def auth_login(
     password: Optional[str] = typer.Option(
         None,
         "--password",
-        help="Password for credential login (not recommended; prefer prompt)",
-    ),
-    credentials: bool = typer.Option(
-        False,
-        "--credentials",
-        help="Prompt for username and password to request a token from the Swain backend",
+        help="Password for credential login (prompted when omitted)",
     ),
     auth_base_url: Optional[str] = typer.Option(
         None,
@@ -2382,12 +2347,8 @@ def auth_login(
     ),
 ) -> None:
     args = SimpleNamespace(
-        token=token,
-        stdin=stdin,
-        no_prompt=no_prompt,
         username=username,
         password=password,
-        credentials=credentials,
         auth_base_url=auth_base_url,
     )
     try:

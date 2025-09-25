@@ -1,8 +1,6 @@
 import base64
-import io
 import json
 import os
-import sys
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
@@ -248,14 +246,18 @@ def make_jwt(payload: Dict[str, Any]) -> str:
 def test_determine_swain_tenant_id_env(monkeypatch):
     token = make_jwt({"tenant_ids": [1, 2, 3]})
     monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "600")
-    result = cli.determine_swain_tenant_id(token, None, allow_prompt=False)
+    result = cli.determine_swain_tenant_id(
+        cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+    )
     assert result == "600"
 
 
 def test_determine_swain_tenant_id_single_claim(monkeypatch):
     token = make_jwt({"tenant_ids": [987]})
     monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
-    result = cli.determine_swain_tenant_id(token, None, allow_prompt=False)
+    result = cli.determine_swain_tenant_id(
+        cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+    )
     assert result == "987"
 
 
@@ -263,7 +265,9 @@ def test_determine_swain_tenant_id_multiple_claims_requires_choice(monkeypatch):
     token = make_jwt({"tenant_ids": [10, 20]})
     monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
     with pytest.raises(cli.CLIError):
-        cli.determine_swain_tenant_id(token, None, allow_prompt=False)
+        cli.determine_swain_tenant_id(
+            cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+        )
 
 
 def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
@@ -366,19 +370,6 @@ def test_extract_archive_unknown(tmp_path):
         cli.extract_archive(archive, tmp_path / "out")
 
 
-def test_read_login_token_stdin(monkeypatch):
-    monkeypatch.setattr(sys, "stdin", io.StringIO("stdin-token\n"))
-    args = SimpleNamespace(token=None, stdin=True, no_prompt=False)
-    assert cli.read_login_token(args) == "stdin-token"
-
-
-def test_read_login_token_no_prompt(monkeypatch):
-    monkeypatch.delenv(cli.AUTH_TOKEN_ENV_VAR, raising=False)
-    args = SimpleNamespace(token=None, stdin=False, no_prompt=True)
-    with pytest.raises(cli.CLIError):
-        cli.read_login_token(args)
-
-
 def test_swain_login_with_credentials_success(monkeypatch):
     response = FakeResponse(
         "https://api.example.com/auth/login",
@@ -406,12 +397,8 @@ def test_read_login_token_with_credentials(monkeypatch):
 
     monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
-        token=None,
-        stdin=False,
-        no_prompt=False,
         username="alice",
         password="wonderland",
-        credentials=False,
         auth_base_url="https://api.example.com",
     )
     token = cli.read_login_token(args)
@@ -428,25 +415,13 @@ def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
         lambda base, user, pwd: {"token": "xyz", "refresh_token": None},
     )
     args = SimpleNamespace(
-        token=None,
-        stdin=False,
-        no_prompt=False,
         username=None,
         password=None,
-        credentials=True,
         auth_base_url=None,
     )
     token = cli.read_login_token(args)
     assert token == "xyz"
     assert getattr(args, "login_refresh_token") is None
-
-
-def test_auth_login_uses_keyring():
-    args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
-    assert cli.handle_auth_login(args) == 0
-    state = cli.load_auth_state()
-    assert state.access_token == "supersecret"
-    assert state.refresh_token is None
 
 
 def test_handle_auth_login_with_credentials(monkeypatch):
@@ -457,12 +432,8 @@ def test_handle_auth_login_with_credentials(monkeypatch):
 
     monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
-        token=None,
-        stdin=False,
-        no_prompt=False,
         username="carol",
         password="password123",
-        credentials=False,
         auth_base_url="https://api.swain.technology",
     )
     assert cli.handle_auth_login(args) == 0
@@ -471,9 +442,36 @@ def test_handle_auth_login_with_credentials(monkeypatch):
     assert state.refresh_token == "new-refresh"
 
 
+def test_interactive_auth_setup_prompts_credentials(monkeypatch):
+    monkeypatch.setattr(cli, "resolve_auth_token", lambda: None)
+    monkeypatch.setattr(cli, "prompt_confirm", lambda prompt, default=True: True)
+
+    captured_args: Dict[str, Any] = {}
+
+    def fake_read_login_token(ns):
+        captured_args["auth_base_url"] = ns.auth_base_url
+        setattr(ns, "login_refresh_token", "refresh-token")
+        return "credential-token"
+
+    monkeypatch.setattr(cli, "read_login_token", fake_read_login_token)
+
+    captured_persist: Dict[str, Optional[str]] = {}
+
+    def fake_persist(token, refresh=None):
+        captured_persist["token"] = token
+        captured_persist["refresh"] = refresh
+
+    monkeypatch.setattr(cli, "persist_auth_token", fake_persist)
+
+    cli.interactive_auth_setup()
+
+    assert captured_args["auth_base_url"] is None
+    assert captured_persist["token"] == "credential-token"
+    assert captured_persist["refresh"] == "refresh-token"
+
+
 def test_auth_logout_removes_token():
-    args = SimpleNamespace(token="supersecret", stdin=False, no_prompt=False)
-    cli.handle_auth_login(args)
+    cli.persist_auth_token("supersecret", None)
     assert cli.handle_auth_logout(SimpleNamespace()) == 0
     state = cli.load_auth_state()
     assert state.access_token is None
@@ -884,7 +882,7 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
     monkeypatch.setattr(
         cli,
         "determine_swain_tenant_id",
-        lambda token, provided, *, allow_prompt: provided,
+        lambda base, token, provided, *, allow_prompt: provided,
     )
     monkeypatch.setattr(
         cli,
@@ -954,8 +952,9 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     monkeypatch.setattr(cli, "prompt_select", lambda prompt, choices: choices[0].value)
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
-
-    def fake_determine(token, provided, *, allow_prompt):
+    
+    def fake_determine(base, token, provided, *, allow_prompt):
+        assert base == "https://api.example.com"
         assert token == "token-xyz"
         assert allow_prompt is True
         return "14"
