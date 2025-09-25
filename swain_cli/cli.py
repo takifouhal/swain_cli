@@ -454,12 +454,18 @@ def fetch_crudsql_schema(
         raise CLIError(f"failed to persist CrudSQL schema locally: {exc}") from exc
 
 
-def _swain_url(base_url: str, path: str) -> httpx.URL:
+def _swain_url(
+    base_url: str, path: str, *, enforce_api_prefix: bool = True
+) -> httpx.URL:
     normalized_base = base_url.rstrip("/") + "/"
     base_url_obj = httpx.URL(normalized_base)
     normalized_path = path.lstrip("/")
 
-    if normalized_path and not normalized_path.startswith("api/"):
+    if (
+        enforce_api_prefix
+        and normalized_path
+        and not normalized_path.startswith("api/")
+    ):
         path_segments = [segment for segment in base_url_obj.path.split("/") if segment]
         if not any(segment == "api" for segment in path_segments):
             # Ensure requests target the API prefix even when the base URL omits it.
@@ -634,7 +640,7 @@ def swain_login_with_credentials(
         raise CLIError("username is required for credential login")
     if not password:
         raise CLIError("password is required for credential login")
-    login_url = _swain_url(base_url, "auth/login")
+    login_url = _swain_url(base_url, "auth/login", enforce_api_prefix=False)
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",

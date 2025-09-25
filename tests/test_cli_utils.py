@@ -170,6 +170,20 @@ def test_crudsql_dynamic_swagger_url_variants():
         cli.crudsql_dynamic_swagger_url("api.example.com")
 
 
+def test_swain_url_enforces_api_prefix_by_default():
+    url = cli._swain_url("https://api.example.com", "Project")
+    assert str(url) == "https://api.example.com/api/Project"
+
+
+def test_swain_url_can_skip_api_prefix():
+    url = cli._swain_url(
+        "https://api.example.com",
+        "auth/login",
+        enforce_api_prefix=False,
+    )
+    assert str(url) == "https://api.example.com/auth/login"
+
+
 class FakeResponse:
     def __init__(self, url, *, status_code=200, content=b"", json_data=None, reason="OK"):
         self.url = url
@@ -367,7 +381,7 @@ def test_read_login_token_no_prompt(monkeypatch):
 
 def test_swain_login_with_credentials_success(monkeypatch):
     response = FakeResponse(
-        "https://api.example.com/api/auth/login",
+        "https://api.example.com/auth/login",
         json_data={"token": "abc", "refresh_token": "refresh"},
         content=b"{}",
     )
