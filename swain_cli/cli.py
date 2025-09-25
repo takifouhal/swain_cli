@@ -37,7 +37,6 @@ DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
 TENANT_ID_ENV_VAR = "SWAIN_CLI_TENANT_ID"
 TENANT_HEADER_NAME = "X-Tenant-ID"
-TENANT_MANUAL_CHOICE = "__manual__"
 KEYRING_SERVICE = "swain_cli"
 KEYRING_USERNAME = "access_token"
 KEYRING_REFRESH_USERNAME = "refresh_token"
@@ -536,7 +535,46 @@ def _extract_tenant_ids_from_token(token: str) -> List[str]:
     return candidates
 
 
+def _fetch_account_name_for_tenant(
+    base_url: str, token: str, tenant_id: Union[str, int]
+) -> Optional[str]:
+    normalized = _normalize_tenant_id(tenant_id)
+    if not normalized:
+        return None
+
+    url = _swain_url(base_url, f"Account/{normalized}")
+    headers = _swain_request_headers(token, tenant_id=normalized)
+    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        try:
+            response = client.get(url, headers=headers)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            return None
+        except httpx.HTTPError:
+            return None
+
+    try:
+        payload = response.json()
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, dict):
+        name = _safe_str(_pick(payload, "name"))
+        if name:
+            return name
+        data_section = payload.get("data")
+        if isinstance(data_section, dict):
+            name = _safe_str(_pick(data_section, "name"))
+            if name:
+                return name
+    return None
+
+
 def determine_swain_tenant_id(
+    base_url: str,
     token: str,
     provided: Optional[Union[str, int]],
     *,
@@ -555,24 +593,29 @@ def determine_swain_tenant_id(
     if candidates:
         if len(candidates) == 1:
             tenant_id = candidates[0]
-            log(f"using tenant id {tenant_id} derived from access token claims")
+            account_name = _fetch_account_name_for_tenant(base_url, token, tenant_id)
+            if account_name:
+                log(
+                    "using tenant"
+                    f" {account_name} (#{tenant_id}) derived from access token claims"
+                )
+            else:
+                log(
+                    f"using tenant id {tenant_id} derived from access token claims"
+                )
             return tenant_id
         if allow_prompt:
-            choices = [
-                questionary.Choice(title=str(candidate), value=str(candidate))
-                for candidate in candidates
-            ]
-            choices.append(
-                questionary.Choice(
-                    title="Enter tenant ID manually", value=TENANT_MANUAL_CHOICE
+            ordered_choices = []
+            for candidate in candidates:
+                name = _fetch_account_name_for_tenant(base_url, token, candidate)
+                title = f"{name} (#{candidate})" if name else str(candidate)
+                ordered_choices.append(
+                    questionary.Choice(title=title, value=str(candidate))
                 )
-            )
             selection = prompt_select(
                 "Select Swain tenant ID",
-                choices=choices,
+                choices=ordered_choices,
             )
-            if selection == TENANT_MANUAL_CHOICE:
-                return prompt_text("Swain tenant ID")
             return str(selection)
         raise CLIError(
             "multiple tenant IDs available; specify --swain-tenant-id or set SWAIN_CLI_TENANT_ID"
@@ -1507,6 +1550,11 @@ def handle_gen(args: SimpleNamespace) -> int:
     swain_tenant_id = getattr(args, "swain_tenant_id", None)
     temp_schema: Optional[Path] = None
     selected_connection: Optional[SwainConnection] = None
+    base_url = (
+        crudsql_url.strip()
+        if isinstance(crudsql_url, str) and crudsql_url.strip()
+        else DEFAULT_CRUDSQL_BASE_URL
+    )
 
     tenant_id_cache: Optional[str] = None
 
@@ -1514,6 +1562,7 @@ def handle_gen(args: SimpleNamespace) -> int:
         nonlocal tenant_id_cache
         if tenant_id_cache is None:
             tenant_id_cache = determine_swain_tenant_id(
+                base_url,
                 token,
                 swain_tenant_id,
                 allow_prompt=False,
@@ -1528,7 +1577,6 @@ def handle_gen(args: SimpleNamespace) -> int:
                     raise CLIError(f"schema not found: {schema_path}")
                 schema = str(schema_path)
         else:
-            base_url = (crudsql_url or "").strip() or DEFAULT_CRUDSQL_BASE_URL
             purpose = (
                 "fetch the Swain connection swagger document"
                 if (swain_connection_id or swain_project_id)
@@ -1885,6 +1933,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         dynamic_swagger_url = crudsql_dynamic_swagger_url(crudsql_base)
         token = require_auth_token("discover Swain projects and connections")
         tenant_id = determine_swain_tenant_id(
+            crudsql_base,
             token,
             tenant_id,
             allow_prompt=True,
