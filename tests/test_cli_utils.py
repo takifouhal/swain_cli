@@ -3,7 +3,6 @@ import io
 import json
 import os
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
@@ -103,6 +102,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
     def fake_handle_interactive(args):
         captured["java_opts"] = getattr(args, "java_opts", None)
         captured["generator_args"] = getattr(args, "generator_args", None)
+        captured["crudsql_url"] = getattr(args, "crudsql_url", None)
         return 0
 
     monkeypatch.setattr(cli, "handle_interactive", fake_handle_interactive)
@@ -118,6 +118,8 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
             "--global-property=apis=Foo",
             "--generator-arg",
             "--skip-operation-example",
+            "--swain-base-url",
+            "https://api.override",
         ],
     )
     assert result.exit_code == 0
@@ -126,6 +128,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
         "--global-property=apis=Foo",
         "--skip-operation-example",
     ]
+    assert captured.get("crudsql_url") == "https://api.override"
 
 
 def test_build_generate_command_alias(tmp_path):
@@ -822,21 +825,38 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
     assert any("apiDocs=false" in part for part in second_cmd)
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
-    confirm_values = iter([False, False])
-
-    text_values = iter(
-        [
-            "http://example.com/openapi.yaml",
-            "sdks",
-            "python",
-        ]
+    project = cli.SwainProject(id=1, name="Project", raw={})
+    connection = cli.SwainConnection(
+        id=2,
+        database_name="main-db",
+        driver="postgres",
+        stage="prod",
+        project_name="Project",
+        schema_name="public",
+        build_id=10,
+        build_endpoint="https://connection.example.com",
+        connection_endpoint=None,
+        raw={"id": 2, "project_id": 1},
     )
 
+    confirm_values = iter([False])
+
+    text_values = iter([
+        "sdks",
+        "python",
+    ])
+
     def fake_confirm(prompt, default=True):
-        return next(confirm_values)
+        try:
+            return next(confirm_values)
+        except StopIteration:
+            pytest.fail(f"unexpected confirm prompt: {prompt}")
 
     def fake_text(prompt, default=None, validate=None, allow_empty=False):
-        value = next(text_values)
+        try:
+            value = next(text_values)
+        except StopIteration:
+            pytest.fail(f"unexpected text prompt: {prompt}")
         if callable(validate):
             error = validate(value)
             if error:
@@ -846,19 +866,33 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
     monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
     monkeypatch.setattr(cli, "prompt_text", fake_text)
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
-    monkeypatch.setattr(cli, "guess_default_schema", lambda: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
     monkeypatch.setattr(
         cli,
-        "fetch_crudsql_schema",
-        lambda base, token, tenant_id=None: Path("schema.json"),
+        "determine_swain_tenant_id",
+        lambda token, provided, *, allow_prompt: provided,
     )
-    monkeypatch.setattr(cli, "handle_gen", lambda args: 0)
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_projects",
+        lambda base, token, tenant_id=None: [project],
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connections",
+        lambda base, token, tenant_id=None, project_id=None: [connection],
+    )
+
+    def fail_handle_gen(args):
+        pytest.fail("generation should not run when user declines")
+
+    monkeypatch.setattr(cli, "handle_gen", fail_handle_gen)
 
     result = cli.handle_interactive(SimpleNamespace(generator_version=None))
     assert result == 0
     out, err = capfd.readouterr()
     assert "interactive SDK generation wizard" in out
+    assert "generation skipped" in out
     assert err == ""
 
 
@@ -877,21 +911,24 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         raw={"id": 110, "project_id": 102},
     )
 
-    confirm_values = iter([True, True])
+    confirm_values = iter([True])
 
-    text_values = iter(
-        [
-            "https://api.example.com",
-            "sdks",
-            "go",
-        ]
-    )
+    text_values = iter([
+        "sdks",
+        "go",
+    ])
 
     def fake_confirm(prompt, default=True):
-        return next(confirm_values)
+        try:
+            return next(confirm_values)
+        except StopIteration:
+            pytest.fail(f"unexpected confirm prompt: {prompt}")
 
     def fake_text(prompt, default=None, validate=None, allow_empty=False):
-        value = next(text_values)
+        try:
+            value = next(text_values)
+        except StopIteration:
+            pytest.fail(f"unexpected text prompt: {prompt}")
         if callable(validate):
             error = validate(value)
             if error:
@@ -910,16 +947,18 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         return "14"
 
     monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
-    monkeypatch.setattr(
-        cli,
-        "fetch_swain_projects",
-        lambda base, token, tenant_id=None: [project],
-    )
-    monkeypatch.setattr(
-        cli,
-        "fetch_swain_connections",
-        lambda base, token, tenant_id=None, project_id=None: [connection],
-    )
+    seen_bases: List[str] = []
+
+    def fake_fetch_projects(base, token, tenant_id=None):
+        seen_bases.append(base)
+        return [project]
+
+    def fake_fetch_connections(base, token, tenant_id=None, project_id=None):
+        seen_bases.append(base)
+        return [connection]
+
+    monkeypatch.setattr(cli, "fetch_swain_projects", fake_fetch_projects)
+    monkeypatch.setattr(cli, "fetch_swain_connections", fake_fetch_connections)
 
     captured: Dict[str, Any] = {}
 
@@ -934,6 +973,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
             generator_version=None,
             java_opts=["-Xmx5g"],
             generator_args=["--global-property=apis=Job"],
+            crudsql_url="https://api.example.com",
         )
     )
     assert result == 0
@@ -947,3 +987,4 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         "--global-property=apis=Job",
         f"--global-property={cli.GLOBAL_PROPERTY_DISABLE_DOCS}",
     ]
+    assert seen_bases == ["https://api.example.com", "https://api.example.com"]

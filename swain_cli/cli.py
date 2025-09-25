@@ -1419,8 +1419,8 @@ def prompt_select(prompt: str, choices: Sequence[Any]) -> Any:
 def interactive_auth_setup() -> None:
     existing = resolve_auth_token()
     if existing:
-        if prompt_confirm("Reuse the existing authentication token?", default=True):
-            return
+        log("reusing existing authentication token")
+        return
     else:
         log("no authentication token configured.")
         if not prompt_confirm("Add an access token before continuing?", default=True):
@@ -1862,18 +1862,13 @@ def run_interactive(args: SimpleNamespace) -> int:
     log("interactive SDK generation wizard")
     log("press Ctrl+C at any time to cancel")
     interactive_auth_setup()
-    schema_default = guess_default_schema()
-
-    def validate_schema(value: str) -> Optional[str]:
-        if is_url(value):
-            return None
-        path = Path(value).expanduser()
-        if not path.exists():
-            return f"schema not found at {path}"
-        return None
-
-    crudsql_base: Optional[str] = None
-    schema_input: Optional[str] = None
+    crudsql_base_arg = getattr(args, "crudsql_url", None)
+    crudsql_base = (
+        crudsql_base_arg.strip()
+        if isinstance(crudsql_base_arg, str) and crudsql_base_arg.strip()
+        else DEFAULT_CRUDSQL_BASE_URL
+    )
+    dynamic_swagger_url: Optional[str] = None
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None
     tenant_id: Optional[str] = None
@@ -1881,89 +1876,70 @@ def run_interactive(args: SimpleNamespace) -> int:
     generator_args: List[str] = list(getattr(args, "generator_args", None) or [])
 
     try:
-        if prompt_confirm("Fetch schema from the Swain backend?", default=True):
-
-            def validate_swain_base(value: str) -> Optional[str]:
-                try:
-                    crudsql_dynamic_swagger_url(value)
-                except CLIError as exc:
-                    return str(exc)
-                return None
-
-            crudsql_base = prompt_text(
-                "Swain base URL",
-                default=DEFAULT_CRUDSQL_BASE_URL,
-                validate=validate_swain_base,
+        dynamic_swagger_url = crudsql_dynamic_swagger_url(crudsql_base)
+        token = require_auth_token("discover Swain projects and connections")
+        tenant_id = determine_swain_tenant_id(
+            token,
+            tenant_id,
+            allow_prompt=True,
+        )
+        projects = fetch_swain_projects(
+            crudsql_base, token, tenant_id=tenant_id
+        )
+        if not projects:
+            raise CLIError("no projects available on the Swain backend")
+        if len(projects) == 1:
+            swain_project = projects[0]
+            log(
+                f"Detected single project: {swain_project.name} (#{swain_project.id})"
             )
-            token = require_auth_token("discover Swain projects and connections")
-            tenant_id = determine_swain_tenant_id(
-                token,
-                tenant_id,
-                allow_prompt=True,
-            )
-            projects = fetch_swain_projects(
-                crudsql_base, token, tenant_id=tenant_id
-            )
-            if not projects:
-                raise CLIError("no projects available on the Swain backend")
-            if len(projects) == 1:
-                swain_project = projects[0]
-                log(
-                    f"Detected single project: {swain_project.name} (#{swain_project.id})"
-                )
-            else:
-                project_options = {project.id: project for project in projects}
-                project_choices = [
-                    questionary.Choice(
-                        title=f"{project.name} (#{project.id})",
-                        value=project.id,
-                    )
-                    for project in projects
-                ]
-                selected_project_id = prompt_select(
-                    "Select a project", project_choices
-                )
-                swain_project = project_options[selected_project_id]
-
-            connections = fetch_swain_connections(
-                crudsql_base,
-                token,
-                tenant_id=tenant_id,
-                project_id=swain_project.id,
-            )
-            if not connections:
-                raise CLIError(
-                    f"project {swain_project.name} has no connections with builds"
-                )
-            if len(connections) == 1:
-                swain_connection = connections[0]
-                log(
-                    "Detected single connection:"
-                    f" {swain_connection.database_name or swain_connection.id}"
-                )
-            else:
-                connection_options = {conn.id: conn for conn in connections}
-                connection_choices = [
-                    questionary.Choice(
-                        title=(
-                            f"#{conn.id} - {conn.database_name or 'connection'}"
-                            f" ({conn.driver or 'driver'},"
-                            f" schema={conn.schema_name or 'n/a'})"
-                        ),
-                        value=conn.id,
-                    )
-                    for conn in connections
-                ]
-                selected_connection_id = prompt_select(
-                    "Select a connection", connection_choices
-                )
-                swain_connection = connection_options[selected_connection_id]
         else:
-            schema_input = prompt_text(
-                "Schema path or URL",
-                default=str(schema_default) if schema_default else None,
-                validate=validate_schema,
+            project_options = {project.id: project for project in projects}
+            project_choices = [
+                questionary.Choice(
+                    title=f"{project.name} (#{project.id})",
+                    value=project.id,
+                )
+                for project in projects
+            ]
+            selected_project_id = prompt_select(
+                "Select a project", project_choices
             )
+            swain_project = project_options[selected_project_id]
+
+        connections = fetch_swain_connections(
+            crudsql_base,
+            token,
+            tenant_id=tenant_id,
+            project_id=swain_project.id,
+        )
+        if not connections:
+            raise CLIError(
+                f"project {swain_project.name} has no connections with builds"
+            )
+        if len(connections) == 1:
+            swain_connection = connections[0]
+            log(
+                "Detected single connection:"
+                f" {swain_connection.database_name or swain_connection.id}"
+            )
+        else:
+            connection_options = {conn.id: conn for conn in connections}
+            connection_choices = [
+                questionary.Choice(
+                    title=(
+                        f"#{conn.id} - {conn.database_name or 'connection'}"
+                        f" ({conn.driver or 'driver'},"
+                        f" schema={conn.schema_name or 'n/a'})"
+                    ),
+                    value=conn.id,
+                )
+                for conn in connections
+            ]
+            selected_connection_id = prompt_select(
+                "Select a connection", connection_choices
+            )
+            swain_connection = connection_options[selected_connection_id]
 
         out_dir_input = prompt_text(
             "Output directory",
@@ -2012,16 +1988,10 @@ def run_interactive(args: SimpleNamespace) -> int:
     if swain_connection:
         schema_value = swain_dynamic_swagger_from_connection(swain_connection)
         schema_display = schema_value
-    elif crudsql_base:
-        base_to_use = crudsql_base or DEFAULT_CRUDSQL_BASE_URL
-        schema_value = crudsql_dynamic_swagger_url(base_to_use)
-        schema_display = schema_value
     else:
-        if schema_input is None:
-            raise CLIError("schema path or URL not provided")
-        schema_value = (
-            schema_input if is_url(schema_input) else str(Path(schema_input).expanduser())
-        )
+        if dynamic_swagger_url is None:
+            raise CLIError("failed to resolve dynamic swagger URL")
+        schema_value = dynamic_swagger_url
         schema_display = schema_value
 
     out_value = str(Path(out_dir_input).expanduser())
@@ -2300,11 +2270,18 @@ def interactive(
         "--generator-arg",
         help="raw OpenAPI Generator argument (repeatable)",
     ),
+    crudsql_url: Optional[str] = typer.Option(
+        None,
+        "--swain-base-url",
+        "--crudsql-url",
+        help=f"Swain base URL for dynamic schema (default: {DEFAULT_CRUDSQL_BASE_URL})",
+    ),
 ) -> None:
     args = SimpleNamespace(
         generator_version=ctx.obj.generator_version,
         java_opts=java_opt,
         generator_args=generator_arg,
+        crudsql_url=crudsql_url,
     )
     try:
         rc = handle_interactive(args)
