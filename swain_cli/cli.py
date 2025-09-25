@@ -43,8 +43,10 @@ KEYRING_USERNAME = "access_token"
 KEYRING_REFRESH_USERNAME = "refresh_token"
 JAVA_OPTS_ENV_VAR = "SWAIN_CLI_JAVA_OPTS"
 DEFAULT_JAVA_HEAP_OPTION = "-Xmx2g"
-FALLBACK_JAVA_HEAP_OPTION = "-Xmx4g"
+DEFAULT_JAVA_OPTS = ["-Xms2g", "-Xmx10g", "-XX:+UseG1GC"]
+FALLBACK_JAVA_HEAP_OPTION = "-Xmx14g"
 OOM_MARKERS = ("OutOfMemoryError", "GC overhead limit exceeded")
+GLOBAL_PROPERTY_DISABLE_DOCS = "apiDocs=false,apiTests=false,modelDocs=false,modelTests=false"
 DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
@@ -1239,6 +1241,57 @@ def ensure_generator_jar(version: str) -> Path:
     return target
 
 
+def _global_property_mentions_docs(value: str) -> bool:
+    entries = [item.strip() for item in value.split(",") if item.strip()]
+    return any(
+        entry.startswith(prefix)
+        for entry in entries
+        for prefix in ("apiDocs", "apiTests", "modelDocs", "modelTests")
+    )
+
+
+def generator_args_disable_docs(generator_args: Sequence[str]) -> bool:
+    for arg in generator_args:
+        if not arg.startswith("--global-property"):
+            continue
+        _, _, value = arg.partition("=")
+        if _global_property_mentions_docs(value):
+            return True
+    return False
+
+
+def command_disables_docs(cmd: Sequence[str]) -> bool:
+    for idx, part in enumerate(cmd):
+        if part == "--global-property":
+            if idx + 1 < len(cmd) and _global_property_mentions_docs(cmd[idx + 1]):
+                return True
+        elif part.startswith("--global-property="):
+            _, _, value = part.partition("=")
+            if _global_property_mentions_docs(value):
+                return True
+    return False
+
+
+def with_docs_disabled(cmd: Sequence[str]) -> List[str]:
+    new_cmd = list(cmd)
+    new_cmd.append(f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}")
+    return new_cmd
+
+
+def replace_heap_option(java_opts: Sequence[str], new_heap: str) -> List[str]:
+    replaced = False
+    result: List[str] = []
+    for opt in java_opts:
+        if opt.startswith("-Xmx") and not replaced:
+            result.append(new_heap)
+            replaced = True
+        else:
+            result.append(opt)
+    if not replaced:
+        result.append(new_heap)
+    return result
+
+
 def resolve_java_opts(cli_opts: Sequence[str]) -> ResolvedJavaOptions:
     result: List[str] = []
     env_opts = os.environ.get(JAVA_OPTS_ENV_VAR)
@@ -1249,7 +1302,7 @@ def resolve_java_opts(cli_opts: Sequence[str]) -> ResolvedJavaOptions:
     result.extend(cli_opts)
     provided = env_provided or cli_provided
     if not result:
-        result.append(DEFAULT_JAVA_HEAP_OPTION)
+        result.extend(DEFAULT_JAVA_OPTS)
     return ResolvedJavaOptions(result, provided)
 
 
@@ -1568,32 +1621,58 @@ def handle_gen(args: SimpleNamespace) -> int:
         languages = args.languages
         if not languages:
             raise CLIError("at least one --lang is required")
+        raw_generator_args = getattr(args, "generator_arg", None) or []
+        generator_args = list(raw_generator_args)
+        if not generator_args_disable_docs(generator_args):
+            generator_args.append(
+                f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}"
+            )
+        setattr(args, "generator_arg", generator_args)
+
         resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
         java_opts = list(resolved_java_opts.options)
         log(f"java options: {format_cli_command(java_opts)}")
-        used_default_opts = not resolved_java_opts.provided
         for lang in languages:
             resolved_lang, target_dir, cmd = build_generate_command(
                 schema, lang, args, out_dir
             )
             log(f"generating {resolved_lang} into {target_dir}")
-            rc, output = run_openapi_generator(jar, engine, cmd, java_opts)
-            if (
-                rc != 0
-                and used_default_opts
-                and java_opts == resolved_java_opts.options
-                and any(marker in output for marker in OOM_MARKERS)
-            ):
-                java_opts = [FALLBACK_JAVA_HEAP_OPTION]
-                used_default_opts = False
-                log(
-                    "detected OutOfMemoryError; retrying"
-                    f" with java options: {format_cli_command(java_opts)}"
+            current_cmd = list(cmd)
+            current_java_opts = list(java_opts)
+            docs_disabled = command_disables_docs(current_cmd)
+            while True:
+                rc, output = run_openapi_generator(
+                    jar, engine, current_cmd, current_java_opts
                 )
-                rc, output = run_openapi_generator(jar, engine, cmd, java_opts)
-            if rc != 0:
-                log_error(f"generation failed for {resolved_lang} (exit code {rc})")
-                return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+                if rc == 0:
+                    break
+                oom_detected = any(marker in output for marker in OOM_MARKERS)
+                retried = False
+                if rc != 0 and oom_detected:
+                    new_java_opts = replace_heap_option(
+                        current_java_opts, FALLBACK_JAVA_HEAP_OPTION
+                    )
+                    if new_java_opts != current_java_opts:
+                        current_java_opts = new_java_opts
+                        log(
+                            "detected OutOfMemoryError; retrying"
+                            f" with java options: {format_cli_command(current_java_opts)}"
+                        )
+                        retried = True
+                    elif not docs_disabled:
+                        current_cmd = with_docs_disabled(current_cmd)
+                        docs_disabled = True
+                        log(
+                            "detected OutOfMemoryError; retrying with"
+                            " OpenAPI Generator docs/tests disabled"
+                        )
+                        retried = True
+                if not retried:
+                    log_error(
+                        f"generation failed for {resolved_lang} (exit code {rc})"
+                    )
+                    return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+            java_opts = current_java_opts
             resolved_java_opts = ResolvedJavaOptions(java_opts, provided=True)
     finally:
         if temp_schema:
@@ -1798,6 +1877,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None
     tenant_id: Optional[str] = None
+    java_cli_opts: List[str] = list(getattr(args, "java_opts", []))
+    generator_args: List[str] = list(getattr(args, "generator_args", None) or [])
 
     try:
         if prompt_confirm("Fetch schema from the Swain backend?", default=True):
@@ -1920,8 +2001,6 @@ def run_interactive(args: SimpleNamespace) -> int:
 
         sys_props: List[str] = []
 
-        generator_args: List[str] = []
-
         engine_choice = "embedded"
         skip_validate = False
         verbose = False
@@ -1946,6 +2025,8 @@ def run_interactive(args: SimpleNamespace) -> int:
         schema_display = schema_value
 
     out_value = str(Path(out_dir_input).expanduser())
+    if not generator_args_disable_docs(generator_args):
+        generator_args.append(f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}")
     log("configuration preview")
     if swain_connection and swain_project:
         log(f"  swain base: {crudsql_base}")
@@ -1980,7 +2061,7 @@ def run_interactive(args: SimpleNamespace) -> int:
     log(f"  engine: {engine_choice}")
     log(f"  skip validate: {skip_validate}")
     log(f"  verbose: {verbose}")
-    java_preview_opts = resolve_java_opts([]).options
+    java_preview_opts = resolve_java_opts(java_cli_opts).options
     log(f"  java options: {format_cli_command(java_preview_opts)}")
 
     command_preview: List[str] = ["swain_cli"]
@@ -2018,6 +2099,11 @@ def run_interactive(args: SimpleNamespace) -> int:
         command_preview.append("-v")
     if engine_choice != "embedded":
         command_preview.extend(["--engine", engine_choice])
+    preview_java_opts = (
+        java_cli_opts if java_cli_opts else resolve_java_opts(java_cli_opts).options
+    )
+    for opt in preview_java_opts:
+        command_preview.extend(["--java-opt", opt])
 
     log(f"equivalent command: {format_cli_command(command_preview)}")
 
@@ -2039,7 +2125,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         templates=templates_value,
         additional_properties=additional_properties,
         generator_arg=generator_args,
-        java_opts=[],
+        java_opts=list(java_cli_opts),
         property=sys_props,
         skip_validate_spec=skip_validate,
         verbose=verbose,
@@ -2202,8 +2288,24 @@ def gen(
 
 
 @app.command()
-def interactive(ctx: typer.Context) -> None:
-    args = SimpleNamespace(generator_version=ctx.obj.generator_version)
+def interactive(
+    ctx: typer.Context,
+    java_opt: List[str] = typer.Option(
+        [],
+        "--java-opt",
+        help="JVM option passed to the OpenAPI Generator (repeatable)",
+    ),
+    generator_arg: List[str] = typer.Option(
+        [],
+        "--generator-arg",
+        help="raw OpenAPI Generator argument (repeatable)",
+    ),
+) -> None:
+    args = SimpleNamespace(
+        generator_version=ctx.obj.generator_version,
+        java_opts=java_opt,
+        generator_args=generator_arg,
+    )
     try:
         rc = handle_interactive(args)
     except CLIError as exc:

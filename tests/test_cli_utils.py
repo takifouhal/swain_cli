@@ -97,6 +97,37 @@ def test_cli_without_command_shows_help():
     assert "Commands" in result.stdout
 
 
+def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    def fake_handle_interactive(args):
+        captured["java_opts"] = getattr(args, "java_opts", None)
+        captured["generator_args"] = getattr(args, "generator_args", None)
+        return 0
+
+    monkeypatch.setattr(cli, "handle_interactive", fake_handle_interactive)
+    result = runner.invoke(
+        cli.app,
+        [
+            "interactive",
+            "--java-opt",
+            "-Xms1g",
+            "--java-opt",
+            "-Xmx6g",
+            "--generator-arg",
+            "--global-property=apis=Foo",
+            "--generator-arg",
+            "--skip-operation-example",
+        ],
+    )
+    assert result.exit_code == 0
+    assert captured.get("java_opts") == ["-Xms1g", "-Xmx6g"]
+    assert captured.get("generator_args") == [
+        "--global-property=apis=Foo",
+        "--skip-operation-example",
+    ]
+
+
 def test_build_generate_command_alias(tmp_path):
     args = SimpleNamespace(
         config=None,
@@ -487,7 +518,7 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
 
     assert cli.handle_gen(args) == 0
     assert "cmd" in captured
-    assert captured.get("java_opts") == [cli.DEFAULT_JAVA_HEAP_OPTION]
+    assert captured.get("java_opts") == cli.DEFAULT_JAVA_OPTS
     assert not schema_file.exists()
     assert os.path.isdir(args.out)
 
@@ -687,7 +718,7 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
 
     assert cli.handle_gen(args) == 0
     assert "cmd" in captured
-    assert captured.get("java_opts") == [cli.DEFAULT_JAVA_HEAP_OPTION]
+    assert captured.get("java_opts") == cli.DEFAULT_JAVA_OPTS
     assert not schema_file.exists()
 
 
@@ -709,10 +740,10 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
     def fake_run(jar, engine, cmd, java_opts):
         call_index = len(calls)
         if call_index == 0:
-            assert java_opts == [cli.DEFAULT_JAVA_HEAP_OPTION]
+            assert java_opts == cli.DEFAULT_JAVA_OPTS
             calls.append((java_opts, call_index))
             return 1, "java.lang.OutOfMemoryError"
-        assert java_opts == [cli.FALLBACK_JAVA_HEAP_OPTION]
+        assert any(opt.startswith(cli.FALLBACK_JAVA_HEAP_OPTION) for opt in java_opts)
         calls.append((java_opts, call_index))
         return 0, ""
 
@@ -739,6 +770,56 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
 
     assert cli.handle_gen(args) == 0
     assert len(calls) == 2
+
+
+def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text("{}")
+
+    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "777")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token")
+    monkeypatch.setattr(
+        cli,
+        "fetch_crudsql_schema",
+        lambda base, token, tenant_id=None: schema_file,
+    )
+
+    calls: List[List[str]] = []
+
+    def fake_run(jar, engine, cmd, java_opts):
+        calls.append(list(cmd))
+        if len(calls) == 1:
+            return 1, "java.lang.OutOfMemoryError"
+        return 0, ""
+
+    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+
+    args = SimpleNamespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url="https://api.example.com",
+        swain_project_id=None,
+        swain_connection_id=None,
+        out=str(tmp_path / "out"),
+        languages=["go"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+        swain_tenant_id=None,
+        java_opts=["-Xmx6g"],
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert len(calls) == 2
+    first_cmd, second_cmd = calls
+    assert any("apiDocs=false" in part for part in first_cmd)
+    assert any("apiDocs=false" in part for part in second_cmd)
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
     confirm_values = iter([False, False])
@@ -848,10 +929,21 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
 
     monkeypatch.setattr(cli, "handle_gen", fake_handle_gen)
 
-    result = cli.handle_interactive(SimpleNamespace(generator_version=None))
+    result = cli.handle_interactive(
+        SimpleNamespace(
+            generator_version=None,
+            java_opts=["-Xmx5g"],
+            generator_args=["--global-property=apis=Job"],
+        )
+    )
     assert result == 0
     assert "args" in captured
     passed_args = captured["args"]
     assert passed_args.swain_tenant_id == "14"
     assert passed_args.swain_project_id == project.id
     assert passed_args.swain_connection_id == connection.id
+    assert passed_args.java_opts == ["-Xmx5g"]
+    assert passed_args.generator_arg == [
+        "--global-property=apis=Job",
+        f"--global-property={cli.GLOBAL_PROPERTY_DISABLE_DOCS}",
+    ]
