@@ -7,6 +7,12 @@ This runbook covers the end-to-end steps for shipping a tagged release that incl
 - **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swain_cli/cli.py` whenever you move the downloads to a new release tag.
 - **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
 
+### Release notes — v0.3.0
+- Reworked authentication to capture tenant context, persist refresh tokens, and support fetching tenant account names for interactive flows.
+- Added tenant-aware CRUD SQL helpers that automatically enforce the `/api` prefix and fetch dynamic swagger documents per connection.
+- Tuned JVM defaults, including higher heap ceilings and explicit G1GC usage, to improve OpenAPI Generator stability on large schemas.
+- Updated packaging metadata so asset bundles ship consistently via `MANIFEST.in` without obsolete JRE binaries.
+
 ### Release notes — v0.2.2
 - Added credential-based authentication (`swain_cli auth login --credentials`) that stores both access and refresh tokens in the system keyring.
 - Fixed the interactive project/connection picker so questionary no longer crashes when rendering choices.

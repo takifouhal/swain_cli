@@ -31,7 +31,7 @@ swain_cli list-generators
 
 # Generate Python and TypeScript clients into ./sdks/<generator>
 swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
-  -p packageName=my_api_client -p packageVersion=0.2.2
+  -p packageName=my_api_client -p packageVersion=0.3.0
 ```
 
 `swain_cli` streams OpenAPI Generator output directly, so you see progress as the SDK is generated.

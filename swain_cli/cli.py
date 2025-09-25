@@ -31,7 +31,7 @@ from platformdirs import PlatformDirs
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 JRE_VERSION = "21.0.4"
-ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.2.2"
+ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.3.0"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
