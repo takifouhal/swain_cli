@@ -18,29 +18,29 @@ jobs:
         include:
           - runner: ubuntu-latest
             shell: bash
-            output: swaggen-jre-linux-x86_64.tar.gz
+            output: swain_cli-jre-linux-x86_64.tar.gz
             script: scripts/build-jre-linux.sh
             jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_linux_hotspot_21.0.4_7.tar.gz
             jdk_ext: tar.gz
           - runner: ubuntu-latest
             shell: run-on-arch
-            output: swaggen-jre-linux-arm64.tar.gz
+            output: swain_cli-jre-linux-arm64.tar.gz
             jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.4_7.tar.gz
           - runner: macos-13
             shell: bash
-            output: swaggen-jre-macos-x86_64.tar.gz
+            output: swain_cli-jre-macos-x86_64.tar.gz
             script: scripts/build-jre-macos.sh
             jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_mac_hotspot_21.0.4_7.tar.gz
             jdk_ext: tar.gz
           - runner: macos-14
             shell: bash
-            output: swaggen-jre-macos-arm64.tar.gz
+            output: swain_cli-jre-macos-arm64.tar.gz
             script: scripts/build-jre-macos.sh
             jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.4_7.tar.gz
             jdk_ext: tar.gz
           - runner: windows-latest
             shell: pwsh
-            output: swaggen-jre-windows-x86_64.zip
+            output: swain_cli-jre-windows-x86_64.zip
             jdk_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4+7/OpenJDK21U-jdk_x64_windows_hotspot_21.0.4_7.zip
     steps:
       - uses: actions/checkout@v4
@@ -145,12 +145,11 @@ jobs:
           python -m pip install pyinstaller
       - name: Build executable
         run: |
-          pyinstaller -n swaggen --onefile swaggen/cli.py \
-            --add-data "swaggen/vendor/openapi-generator-cli-7.6.0.jar:swaggen/vendor"
+          pyinstaller -n swain_cli --onefile swain_cli/cli.py
         shell: bash
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*/swaggen*
+          files: dist/*/swain_cli*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

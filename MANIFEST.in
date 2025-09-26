@@ -3,5 +3,5 @@ include README.md
 include plan.md
 recursive-include examples *.yaml
 recursive-include scripts *.sh *.ps1
-recursive-include swain_cli/vendor *.jar
-recursive-include swain_cli/assets *
+recursive-exclude swain_cli/vendor *
+recursive-exclude swain_cli/assets *

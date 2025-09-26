@@ -34,35 +34,35 @@ jobs:
             temurin_arch: x64
             archive_ext: tar.gz
             script: scripts/build-jre-linux.sh
-            output: swaggen-jre-linux-x86_64.tar.gz
+            output: swain_cli-jre-linux-x86_64.tar.gz
           - label: linux-arm64
             runner: ubuntu-22.04-arm
             temurin_os: linux
             temurin_arch: aarch64
             archive_ext: tar.gz
             script: scripts/build-jre-linux.sh
-            output: swaggen-jre-linux-arm64.tar.gz
+            output: swain_cli-jre-linux-arm64.tar.gz
           - label: macos-x86_64
             runner: macos-13
             temurin_os: mac
             temurin_arch: x64
             archive_ext: tar.gz
             script: scripts/build-jre-macos.sh
-            output: swaggen-jre-macos-x86_64.tar.gz
+            output: swain_cli-jre-macos-x86_64.tar.gz
           - label: macos-arm64
             runner: macos-14
             temurin_os: mac
             temurin_arch: aarch64
             archive_ext: tar.gz
             script: scripts/build-jre-macos.sh
-            output: swaggen-jre-macos-arm64.tar.gz
+            output: swain_cli-jre-macos-arm64.tar.gz
           - label: windows-x86_64
             runner: windows-latest
             temurin_os: windows
             temurin_arch: x64
             archive_ext: zip
             script: scripts/build-jre-windows.ps1
-            output: swaggen-jre-windows-x86_64.zip
+            output: swain_cli-jre-windows-x86_64.zip
     env:
       JDK_MAJOR: ${{ inputs.jdk_major }}
       JDK_VERSION: ${{ inputs.jdk_version }}
@@ -130,7 +130,7 @@ jobs:
           JDK_VERSION: ${{ inputs.jdk_version }}
         run: |
           set -euo pipefail
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "swaggen JRE $JDK_VERSION" --notes "Trimmed Temurin $JDK_VERSION runtimes built via CI."
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "swain_cli JRE $JDK_VERSION" --notes "Trimmed Temurin $JDK_VERSION runtimes built via CI."
           while IFS= read -r -d '' file; do
             gh release upload "$RELEASE_TAG" "$file" --clobber
           done < <(find artifacts -type f -print0)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swain_cli"
-version = "0.3.0"
+version = "0.3.2"
 description = "Zero-setup SDK generator wrapping OpenAPI Generator"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -48,8 +48,9 @@ Repository = "https://github.com/takifouhal/swain_cli"
 [project.scripts]
 swain_cli = "swain_cli.cli:main"
 
-[tool.setuptools.package-data]
-swain_cli = ["vendor/*.jar", "assets/*"]
+#[tool.setuptools.package-data]
+# No bundled assets; the CLI downloads JREs and the generator jar at runtime.
+# swain_cli = []
 
 [tool.setuptools.packages.find]
 include = ["swain_cli*"]

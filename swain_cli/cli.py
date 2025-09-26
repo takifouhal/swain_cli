@@ -1256,12 +1256,15 @@ def resolve_generator_jar(version: Optional[str]) -> Path:
         vendor = find_vendor_jar()
         if vendor:
             return vendor
+        # No bundled jar; ensure the pinned version is downloaded to cache.
+        return ensure_generator_jar(PINNED_GENERATOR_VERSION)
     jar_path = jar_cache_dir() / chosen / f"openapi-generator-cli-{chosen}.jar"
     if jar_path.exists():
         return jar_path
     if chosen == PINNED_GENERATOR_VERSION:
+        # Should not happen because we auto-download above, but keep a friendly error.
         raise CLIError(
-            "bundled OpenAPI Generator jar not found; reinstall or run engine update-jar"
+            "OpenAPI Generator jar missing; run 'swain_cli engine update-jar --version 7.6.0'"
         )
     raise CLIError(
         f"OpenAPI Generator {chosen} is not cached; run 'swain_cli engine update-jar --version {chosen}'"
