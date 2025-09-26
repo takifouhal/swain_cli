@@ -1676,6 +1676,17 @@ def handle_gen(args: SimpleNamespace) -> int:
         languages = args.languages
         if not languages:
             raise CLIError("at least one --lang is required")
+        # Ensure generated models include additionalProperties by default.
+        # Many generators default to disallowing additionalProperties when not explicitly present in the spec.
+        # Align with OAS/JSON Schema by setting disallowAdditionalPropertiesIfNotPresent=false unless the user overrides it.
+        addl_props: List[str] = list(getattr(args, "additional_properties", None) or [])
+        has_flag = any(
+            (prop.split("=", 1)[0].strip() == "disallowAdditionalPropertiesIfNotPresent")
+            for prop in addl_props
+        )
+        if not has_flag:
+            addl_props.append("disallowAdditionalPropertiesIfNotPresent=false")
+        setattr(args, "additional_properties", addl_props)
         raw_generator_args = getattr(args, "generator_arg", None) or []
         generator_args = list(raw_generator_args)
         if not generator_args_disable_docs(generator_args):

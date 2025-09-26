@@ -55,6 +55,16 @@ Pushing the tag triggers the `release` workflow automatically.
   3. `binaries` (optional) runs PyInstaller on Linux/macOS/Windows and attaches the executables to the release.
 - **`ci.yml`** runs on every push/PR to ensure the test suite passes. Confirm the latest PR before tagging is green.
 
+### Manual PyPI publish (fallback)
+If the automated publish job is skipped or fails and you need to ship from a workstation:
+
+```bash
+python3 -m build
+python3 -m twine upload dist/swain_cli-<version>*
+```
+
+Run these commands from the repo root after exporting your PyPI API token (via `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` or `~/.pypirc`). Remove or ignore any older files in `dist/`—Twine will reject uploads whose filenames already exist on PyPI.
+
 ## 5. Verify the release
 1. Wait for the `release` workflow to succeed.
 2. Check the tagged GitHub Release page and confirm all JRE archives plus `.sha256` files exist.
