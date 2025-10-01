@@ -1,84 +1,88 @@
 # Releasing swain_cli
 
-This runbook covers the end-to-end steps for shipping a tagged release that includes updated JRE assets and PyPI artifacts.
+This runbook walks through publishing a tagged release that ships refreshed JRE assets and updated PyPI distributions.
 
 ## Quick reference
-- **Version bump locations**: `pyproject.toml`, `swain_cli/__init__.py`, and anywhere else the version is surfaced to users.
-- **Cached assets**: Update embedded JRE checksums and the `ASSET_BASE` constant in `swain_cli/cli.py` whenever you move the downloads to a new release tag.
-- **Release workflows**: `release.yml` handles JRE builds, distribution publishing, and optional PyInstaller binaries; `ci.yml` exercises pytest across platforms and Python 3.8/3.11.
+- **Version bumps** — update `pyproject.toml`, `swain_cli/__init__.py`, and any other user-facing version strings.
+- **Embedded assets** — refresh JRE checksums plus the `ASSET_BASE` constant in `swain_cli/cli.py` whenever download locations change.
+- **Automation** — `release.yml` builds JREs, publishes to PyPI, and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across Python 3.8–3.11 on every push/PR.
 
-### Release notes — v0.3.0
-- Reworked authentication to capture tenant context, persist refresh tokens, and support fetching tenant account names for interactive flows.
-- Added tenant-aware CRUD SQL helpers that automatically enforce the `/api` prefix and fetch dynamic swagger documents per connection.
-- Tuned JVM defaults, including higher heap ceilings and explicit G1GC usage, to improve OpenAPI Generator stability on large schemas.
-- Updated packaging metadata so asset bundles ship consistently via `MANIFEST.in` without obsolete JRE binaries.
+## End-to-end checklist
+1. Confirm `main` has every change you intend to ship and that `plan.md` (or your changelog source) is current.
+2. Run the full test suite locally: `python -m pytest`.
+3. Update the version in all required files and stage the changes.
+4. Regenerate JRE artefacts and hashes if the Temurin version or layout changed.
+5. Smoke-test both the embedded and system engines locally.
+6. Commit with a message such as `Release vX.Y.Z` and tag the release.
+7. Push the branch and tag to kick off the automation.
 
-### Release notes — v0.2.2
-- Added credential-based authentication (`swain_cli auth login --credentials`) that stores both access and refresh tokens in the system keyring.
-- Fixed the interactive project/connection picker so questionary no longer crashes when rendering choices.
-- Bumped the default release assets to `v0.2.2` and refreshed packaging/tests prior to publish.
+## Step-by-step guide
+### 1. Prepare the release
+- Review open PRs/issues and make sure nothing critical is missing.
+- Verify runtime dependencies in `pyproject.toml` match what the CLI actually imports.
+- Update release notes (`plan.md`, GitHub Releases draft, or your chosen location).
+- Run `python -m pytest` and fix failures before continuing.
 
-## 1. Pre-release checklist
-- Confirm `main` contains the changes you intend to release and that `plan.md` or changelog notes are up to date.
-- Run the full test suite locally: `python -m pytest`.
-- Verify the runtime dependency list in `pyproject.toml` matches the CLI implementation (Typer/httpx/questionary/platformdirs/keyring/pooch) and update release notes accordingly.
-- Update the version number where required and commit the result (for example, `"Release v0.x.y"`).
-- If the JRE archives changed, record new SHA-256 values in `swain_cli/cli.py` and verify the filenames match the release assets.
-- Smoke-test the CLI locally using both the embedded and system engines if possible:
-  ```bash
-  swain_cli engine install-jre
-  swain_cli doctor
-  swain_cli gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks
-  swain_cli gen -i ./examples/petstore.yaml -l python -o ./tmp-sdks --engine system
-  ```
+### 2. Update embedded JRE assets (only when needed)
+1. Launch the `build-jre` workflow from the GitHub Actions UI.
+2. Supply the desired Temurin version and optional `release_tag` (typically `jre-<version>`). The workflow runs the scripts in `scripts/` to produce trimmed archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows.
+3. When the workflow finishes, download the `.sha256` files from the run and paste the sums into `swain_cli/cli.py`.
+4. Upload the new archives and checksum files to the release specified by `release_tag` (or manually to the appropriate release if you omitted it).
 
-## 2. Produce JRE archives (only when needed)
-1. Trigger the `build-jre` workflow via the GitHub Actions UI.
-2. Provide the desired Temurin version and an optional `release_tag` (`jre-<version>`). The workflow runs the platform-specific scripts in `scripts/` to build trimmed JREs.
-3. When the workflow finishes, download the `.sha256` files from the logs/artifacts and paste the sums into `swain_cli/cli.py`.
-4. If you skipped the optional `release_tag`, upload the produced archives and checksums manually to the appropriate GitHub release.
+### 3. Finalise version bumps
+- Ensure every version bump is committed (for example in `pyproject.toml`, `swain_cli/__init__.py`, CLI help text, and documentation).
+- Stage the updated checksums and `ASSET_BASE` if assets moved.
+- Commit with a message like `Release vX.Y.Z`.
 
-## 3. Tag the release
+### 4. Tag and push
 ```bash
-# After committing the version bump and checksum updates
 git push origin main
-git tag v0.x.y
-git push origin v0.x.y
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
+Pushing the tag triggers `release.yml` automatically.
 
-Pushing the tag triggers the `release` workflow automatically.
-
-## 4. GitHub Actions workflows
+### 5. Workflow overview
 - **`release.yml`**
-  1. `build-jres` matrix builds the trimmed JRE archives for Linux (x86_64/arm64), macOS (Intel/Apple Silicon), and Windows. Each archive and companion `.sha256` file is uploaded to the GitHub Release for the tag.
-  2. `publish` waits for `build-jres`, then runs `python -m build` and uploads the sdist/wheel to PyPI using `PYPI_API_TOKEN`.
-  3. `binaries` (optional) runs PyInstaller on Linux/macOS/Windows and attaches the executables to the release.
-- **`ci.yml`** runs on every push/PR to ensure the test suite passes. Confirm the latest PR before tagging is green.
+  1. `build-jres` produces the trimmed JRE archives and uploads them (plus `.sha256` files) to the tagged GitHub Release.
+  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using `PYPI_API_TOKEN`.
+  3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release.
+- **`ci.yml`** runs on every push/PR; double-check the latest run before cutting the tag.
 
-### Manual PyPI publish (fallback)
-If the automated publish job is skipped or fails and you need to ship from a workstation:
-
+### 6. Manual PyPI publish (fallback)
+Use this only if the automated publish step fails or is skipped.
 ```bash
 python3 -m build
 python3 -m twine upload dist/swain_cli-<version>*
 ```
+Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configure `~/.pypirc`) beforehand. Remove any stale files in `dist/`; PyPI rejects duplicates.
 
-Run these commands from the repo root after exporting your PyPI API token (via `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` or `~/.pypirc`). Remove or ignore any older files in `dist/`—Twine will reject uploads whose filenames already exist on PyPI.
+### 7. Verify the release
+1. Wait for `release.yml` to succeed.
+2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached.
+3. Optionally download an archive (e.g. `swain_cli-jre-linux-x86_64.tar.gz`) and verify the checksum locally.
+4. Install the freshly published package in a clean environment (`pipx install swain_cli`) and run `swain_cli doctor` plus `swain_cli list-generators`.
+5. Update `plan.md` (or your release notes) with the final status.
 
-## 5. Verify the release
-1. Wait for the `release` workflow to succeed.
-2. Check the tagged GitHub Release page and confirm all JRE archives plus `.sha256` files exist.
-3. Optionally download an archive (for example `swain_cli-jre-linux-x86_64.tar.gz`) and verify its checksum locally.
-4. Install the published package from PyPI in a clean environment (e.g. `pipx install swain_cli`) and run a quick smoke test with `swain_cli doctor` and `swain_cli list-generators`.
-5. Update `plan.md` with release notes or status.
+### 8. After the release
+- Announce the release (team channels, changelog, etc.).
+- Close or update GitHub issues tied to the milestone.
+- Clean up temporary artefacts such as local `tmp-sdks` directories or downloaded JRE archives.
 
-## 6. Troubleshooting
-- **Matrix failures**: Re-run the failing job from the Actions UI; Linux ARM64 uses `uraimo/run-on-arch-action` and may flake occasionally.
-- **PyPI upload issues**: Ensure `PYPI_API_TOKEN` is valid, assigned to the project, and stored as an Actions secret.
-- **Windows packaging quirks**: Download the Temurin JDK manually and execute `scripts/build-jre-windows.ps1` via PowerShell to reproduce locally.
-- **Stale caches**: If the embedded JRE changes between releases, warn users to reinstall via `swain_cli engine install-jre` or remove the cache directory printed by `swain_cli doctor`.
+## Troubleshooting
+- **Matrix flakes** — rerun the failing job from the Actions UI; Linux ARM64 relies on `uraimo/run-on-arch-action` and occasionally flakes.
+- **PyPI upload errors** — validate `PYPI_API_TOKEN`, ensure it has project access, and confirm the secret is present in repository settings.
+- **Windows packaging quirks** — reproduce locally by downloading the Temurin JDK and running `scripts/build-jre-windows.ps1` in PowerShell.
+- **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
-## 7. After the release
-- Announce the release (for example in project channels or release notes).
-- Close or update any GitHub issues tied to the milestone.
-- Archive temporary artifacts (local `tmp-sdks`, downloaded JRE archives) to keep the workspace clean.
+## Historical release notes
+### v0.3.0
+- Reworked authentication to capture tenant context, persist refresh tokens, and surface tenant names in interactive flows.
+- Added tenant-aware CRUD SQL helpers that enforce the `/api` prefix and download dynamic swagger per connection.
+- Tuned JVM defaults (higher heap ceilings, explicit G1GC) to stabilise OpenAPI Generator on large schemas.
+- Updated packaging metadata so bundles ship consistently via `MANIFEST.in` without obsolete JRE binaries.
+
+### v0.2.2
+- Added credential-based authentication (`swain_cli auth login --credentials`) that stores access and refresh tokens in the keyring.
+- Fixed the interactive project/connection picker so questionary no longer crashes when rendering choices.
+- Bumped default release assets to `v0.2.2` and refreshed packaging/tests prior to publish.
