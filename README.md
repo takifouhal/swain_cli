@@ -10,11 +10,29 @@
 - Inspect and manage the embedded engine with helper commands (`engine`, `doctor`, `list-generators`)
 
 ## Installation
+
+### Binary (no Python required)
+- macOS/Linux:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.sh | bash
+  ```
+- Windows (PowerShell):
+  ```powershell
+  iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
+  ```
+
+The single-file binary bundles a Python runtime, so no system Python is needed. On first run, `swain_cli` downloads a trimmed Temurin JRE for your platform and caches it.
+
+Notes:
+- Linux arm64 is supported (built via emulated runner).
+- Windows on ARM uses the x86_64 binary and runs under emulation.
+
+### pip/pipx (requires Python 3.8+)
 ```bash
 pipx install swain_cli
 ```
 
-Python 3.8+ is required. Installing with `pipx` keeps `swain_cli` isolated; alternatively run `pip install swain_cli` in a virtual environment.
+Installing with `pipx` keeps `swain_cli` isolated; alternatively run `pip install swain_cli` in a virtual environment.
 
 ## Quick start
 ```bash

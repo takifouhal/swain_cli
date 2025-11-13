@@ -158,9 +158,49 @@ jobs:
         run: |
           pyinstaller -n swain_cli --onefile swain_cli/cli.py
         shell: bash
+      - name: Rename binary with OS/arch suffix (Unix)
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          set -euo pipefail
+          BINARY="dist/swain_cli"
+          if [[ ! -f "$BINARY" ]]; then
+            # PyInstaller sometimes places output under dist directly; check alt path
+            BINARY=$(ls -1 dist/swain_cli 2>/dev/null || true)
+          fi
+          case "${{ matrix.os }}" in
+            ubuntu-latest) os=linux; arch=x86_64 ;;
+            macos-13)      os=macos; arch=x86_64 ;;
+            macos-14)      os=macos; arch=arm64  ;;
+          esac
+          mv "$BINARY" "dist/swain_cli-${os}-${arch}"
+        shell: bash
+      - name: Rename binary with OS/arch suffix (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          $binary = "dist\swain_cli.exe"
+          if (-Not (Test-Path $binary)) { throw "Binary not found: $binary" }
+          Move-Item $binary "dist\swain_cli-windows-x86_64.exe" -Force
+        shell: pwsh
+
+      - name: Build Linux arm64 binary (emulated)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update
+            apt-get install -y python3 python3-pip python3-venv gcc patchelf
+          run: |
+            set -euo pipefail
+            python3 -m pip install --upgrade pip
+            python3 -m pip install pyinstaller
+            pyinstaller -n swain_cli --onefile swain_cli/cli.py
+            mv dist/swain_cli dist/swain_cli-linux-arm64
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*/swain_cli*
+          files: dist/swain_cli-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

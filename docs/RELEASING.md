@@ -46,7 +46,11 @@ Pushing the tag triggers `release.yml` automatically.
 - **`release.yml`**
   1. `build-jres` produces the trimmed JRE archives and uploads them (plus `.sha256` files) to the tagged GitHub Release.
   2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using `PYPI_API_TOKEN`.
-  3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release.
+  3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release as:
+     - `swain_cli-linux-x86_64`
+     - `swain_cli-macos-x86_64`
+     - `swain_cli-macos-arm64`
+     - `swain_cli-windows-x86_64.exe`
 - **`ci.yml`** runs on every push/PR; double-check the latest run before cutting the tag.
 
 ### 6. Manual PyPI publish (fallback)
@@ -61,7 +65,11 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 1. Wait for `release.yml` to succeed.
 2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached.
 3. Optionally download an archive (e.g. `swain_cli-jre-linux-x86_64.tar.gz`) and verify the checksum locally.
-4. Install the freshly published package in a clean environment (`pipx install swain_cli`) and run `swain_cli doctor` plus `swain_cli list-generators`.
+4. Install the freshly published package in a clean environment either as a binary (no Python):
+   - macOS/Linux: `curl -fsSL https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.sh | bash`
+   - Windows (PowerShell): `iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex`
+   Or via Python: `pipx install swain_cli`.
+   Then run `swain_cli doctor` and `swain_cli list-generators`.
 5. Update `plan.md` (or your release notes) with the final status.
 
 ### 8. After the release
