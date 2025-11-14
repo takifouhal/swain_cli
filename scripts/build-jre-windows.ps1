@@ -29,7 +29,9 @@ try {
         Remove-Item -Path $OutputZip -Force
     }
     Compress-Archive -Path (Join-Path $out 'jre') -DestinationPath $OutputZip -CompressionLevel Optimal
-    Get-FileHash -Algorithm SHA256 -Path $OutputZip | Tee-Object -FilePath "$OutputZip.sha256"
+    $hash = (Get-FileHash -Algorithm SHA256 -Path $OutputZip).Hash.ToLower()
+    $name = Split-Path -Leaf $OutputZip
+    "${hash}  ${name}" | Out-File -FilePath "$OutputZip.sha256" -Encoding ascii -NoNewline:$false
 }
 finally {
     Remove-Item -Recurse -Force -Path $work

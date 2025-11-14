@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import hashlib
 import json
 import os
@@ -1028,13 +1029,19 @@ def parse_checksum_file(path: Path) -> str:
     except OSError as exc:
         raise CLIError(f"unable to read checksum file {path}: {exc}") from exc
 
-    for line in lines:
-        candidate = line.strip().split()
-        if not candidate:
+    # Accept common formats:
+    #  - "<hex>  filename" (GNU coreutils shasum/sha256sum)
+    #  - "SHA256 (filename) = <hex>" (BSD shasum)
+    #  - PowerShell Get-FileHash table output (second line contains algo, hash, path)
+    #  - a bare 64-hex digest
+    hex_pattern = re.compile(r"\b([A-Fa-f0-9]{64})\b")
+    for raw in lines:
+        line = raw.strip()
+        if not line:
             continue
-        digest = candidate[0].lower()
-        if len(digest) == 64 and all(char in string.hexdigits for char in digest):
-            return digest
+        match = hex_pattern.search(line)
+        if match:
+            return match.group(1).lower()
     raise CLIError(f"checksum file {path} did not contain a SHA-256 value")
 
 

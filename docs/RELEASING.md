@@ -97,6 +97,10 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 - **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
 ## Historical release notes
+### v0.3.4
+- Accept multiple checksum formats (bare hex, GNU/BSD, PowerShell table) when reading `.sha256` files on all platforms.
+- Standardize Windows JRE `.sha256` files to `"<hex>  <filename>"` for cross-platform consistency.
+
 ### v0.3.3
 - Fix embedded JRE download base to point at v0.3.2 assets (asset name alignment) so Windows/macOS/Linux first-run downloads succeed.
 - Update installer examples to reference `v0.3.3`.

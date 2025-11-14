@@ -478,6 +478,34 @@ def test_auth_logout_removes_token():
     assert state.refresh_token is None
 
 
+def test_parse_checksum_file_variants(tmp_path):
+    # Common digest used across variants
+    digest = "a" * 64
+
+    # Bare digest
+    p1 = tmp_path / "bare.sha256"
+    p1.write_text(f"{digest}\n")
+    assert cli.parse_checksum_file(p1) == digest
+
+    # GNU coreutils format: "<hex>  filename"
+    p2 = tmp_path / "gnu.sha256"
+    p2.write_text(f"{digest}  swain_cli-jre-windows-x86_64.zip\n")
+    assert cli.parse_checksum_file(p2) == digest
+
+    # BSD format: "SHA256 (file) = <hex>"
+    p3 = tmp_path / "bsd.sha256"
+    p3.write_text(f"SHA256 (swain_cli-jre-windows-x86_64.zip) = {digest}\n")
+    assert cli.parse_checksum_file(p3) == digest
+
+    # PowerShell Get-FileHash style (header + values)
+    p4 = tmp_path / "ps.sha256"
+    p4.write_text(
+        "Algorithm       Hash                                                       Path\n"
+        f"SHA256          {digest.upper()}   C:\\tmp\\swain_cli-jre-windows-x86_64.zip\n"
+    )
+    assert cli.parse_checksum_file(p4) == digest
+
+
 def test_auth_status_prefers_env(monkeypatch, capfd):
     monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token-value")
     assert cli.handle_auth_status(SimpleNamespace()) == 0

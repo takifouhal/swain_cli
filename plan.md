@@ -17,6 +17,7 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 - 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705).
 - 2025-09-22: Adopted Typer/httpx/questionary/platformdirs/keyring/pooch across the CLI, refreshed docs/tests, and confirmed `swain_cli doctor` works post-migration.
  - 2025-11-14: Bumped package to v0.3.3, updated JRE ASSET_BASE to v0.3.2 release assets to fix 404s on first-run downloads, refreshed installer examples, and cut release tag v0.3.3.
+ - 2025-11-14: v0.3.4: Robust checksum parsing across GNU/BSD/PowerShell formats; Windows build emits standard `<hex>  <filename>` `.sha256` files; added tests.
 - 2025-09-23: Patched CLI to show help when no command is provided and prepped v0.2.1 release.
 
 
