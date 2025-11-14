@@ -84,6 +84,10 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 - **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
 ## Historical release notes
+### v0.3.3
+- Fix embedded JRE download base to point at v0.3.2 assets (asset name alignment) so Windows/macOS/Linux first-run downloads succeed.
+- Update installer examples to reference `v0.3.3`.
+
 ### v0.3.0
 - Reworked authentication to capture tenant context, persist refresh tokens, and surface tenant names in interactive flows.
 - Added tenant-aware CRUD SQL helpers that enforce the `/api` prefix and download dynamic swagger per connection.

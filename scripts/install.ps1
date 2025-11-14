@@ -3,7 +3,7 @@
 # Usage (PowerShell):
 #   iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
 # Optional:
-#   $env:VERSION = 'v0.3.2'; iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
+#   $env:VERSION = 'v0.3.3'; iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
