@@ -45,7 +45,7 @@ Pushing the tag triggers `release.yml` automatically.
 ### 5. Workflow overview
 - **`release.yml`**
   1. `build-jres` produces the trimmed JRE archives and uploads them (plus `.sha256` files) to the tagged GitHub Release.
-  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using Trusted Publishing (`id-token: write`). The publish step uses `skip-existing: true` so re-runs won’t fail if the version is already uploaded.
+  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using Trusted Publishing (`id-token: write`) and the `pypi` environment. The publish step uses `skip-existing: true` so re-runs won’t fail if the version is already uploaded.
   3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release as:
      - `swain_cli-linux-x86_64`
      - `swain_cli-macos-x86_64`
@@ -60,8 +60,9 @@ Set this up once in PyPI, then all future tags publish automatically without sec
 2. Choose GitHub.
 3. Repository: `takifouhal/swain_cli`.
 4. Workflow filename: `.github/workflows/release.yml`.
-5. Environment: leave blank (unless you restrict to a GH environment).
-6. Save. The next run of `release.yml` can publish.
+5. Environment name: `pypi`.
+6. In GitHub → repo → Settings → Environments, create an environment named `pypi` (no secrets required) and optionally add rules/approvals.
+7. Save. The next run of `release.yml` can publish.
 
 If a past run failed at “Publish to PyPI”, re-run that job from Actions after this setup.
 
