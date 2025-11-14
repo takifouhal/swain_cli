@@ -45,7 +45,7 @@ Pushing the tag triggers `release.yml` automatically.
 ### 5. Workflow overview
 - **`release.yml`**
   1. `build-jres` produces the trimmed JRE archives and uploads them (plus `.sha256` files) to the tagged GitHub Release.
-  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using Trusted Publishing (`id-token: write`).
+  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using Trusted Publishing (`id-token: write`). The publish step uses `skip-existing: true` so re-runs won’t fail if the version is already uploaded.
   3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release as:
      - `swain_cli-linux-x86_64`
      - `swain_cli-macos-x86_64`

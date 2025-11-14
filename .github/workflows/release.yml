@@ -127,6 +127,8 @@ jobs:
           python -m build
       - name: Publish to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
   binaries:
     name: Build one-file binaries
