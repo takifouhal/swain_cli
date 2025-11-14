@@ -130,13 +130,13 @@ jobs:
           python -m build
       - name: Publish to PyPI (API token)
         if: ${{ env.PYPI_HAS_TOKEN == 'true' }}
-        uses: pypa/gh-action-pypi-publish@v1.9.0
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ env.PYPI_API_TOKEN }}
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ env.PYPI_HAS_TOKEN != 'true' }}
-        uses: pypa/gh-action-pypi-publish@v1.9.0
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   binaries:
     name: Build one-file binaries
