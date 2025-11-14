@@ -113,9 +113,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-      PYPI_HAS_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -128,14 +125,7 @@ jobs:
       - name: Build artifacts
         run: |
           python -m build
-      - name: Publish to PyPI (API token)
-        if: ${{ env.PYPI_HAS_TOKEN == 'true' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ env.PYPI_API_TOKEN }}
-
       - name: Publish to PyPI (Trusted Publishing)
-        if: ${{ env.PYPI_HAS_TOKEN != 'true' }}
         uses: pypa/gh-action-pypi-publish@release/v1
 
   binaries:

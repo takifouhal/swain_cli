@@ -5,7 +5,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 ## Quick reference
 - **Version bumps** — update `pyproject.toml`, `swain_cli/__init__.py`, and any other user-facing version strings.
 - **Embedded assets** — refresh JRE checksums plus the `ASSET_BASE` constant in `swain_cli/cli.py` whenever download locations change.
-- **Automation** — `release.yml` builds JREs, publishes to PyPI, and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across Python 3.8–3.11 on every push/PR.
+- **Automation** — `release.yml` builds JREs, publishes to PyPI via Trusted Publishing (OIDC), and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across Python 3.8–3.11 on every push/PR.
 
 ## End-to-end checklist
 1. Confirm `main` has every change you intend to ship and that `plan.md` (or your changelog source) is current.
@@ -45,7 +45,7 @@ Pushing the tag triggers `release.yml` automatically.
 ### 5. Workflow overview
 - **`release.yml`**
   1. `build-jres` produces the trimmed JRE archives and uploads them (plus `.sha256` files) to the tagged GitHub Release.
-  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using `PYPI_API_TOKEN`.
+  2. `publish` waits for JREs, runs `python -m build`, and uploads the wheel + sdist to PyPI using Trusted Publishing (`id-token: write`).
   3. `binaries` (optional) builds PyInstaller executables for Linux, macOS, and Windows and attaches them to the release as:
      - `swain_cli-linux-x86_64`
      - `swain_cli-macos-x86_64`
@@ -53,7 +53,19 @@ Pushing the tag triggers `release.yml` automatically.
      - `swain_cli-windows-x86_64.exe`
 - **`ci.yml`** runs on every push/PR; double-check the latest run before cutting the tag.
 
-### 6. Manual PyPI publish (fallback)
+### 6. Configure Trusted Publishing (one-time)
+Set this up once in PyPI, then all future tags publish automatically without secrets.
+
+1. Go to PyPI → your project → Settings → Publishing → Add a trusted publisher.
+2. Choose GitHub.
+3. Repository: `takifouhal/swain_cli`.
+4. Workflow filename: `.github/workflows/release.yml`.
+5. Environment: leave blank (unless you restrict to a GH environment).
+6. Save. The next run of `release.yml` can publish.
+
+If a past run failed at “Publish to PyPI”, re-run that job from Actions after this setup.
+
+### 7. Manual PyPI publish (fallback)
 Use this only if the automated publish step fails or is skipped.
 ```bash
 python3 -m build
@@ -61,7 +73,7 @@ python3 -m twine upload dist/swain_cli-<version>*
 ```
 Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configure `~/.pypirc`) beforehand. Remove any stale files in `dist/`; PyPI rejects duplicates.
 
-### 7. Verify the release
+### 8. Verify the release
 1. Wait for `release.yml` to succeed.
 2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached.
 3. Optionally download an archive (e.g. `swain_cli-jre-linux-x86_64.tar.gz`) and verify the checksum locally.
@@ -72,14 +84,14 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
    Then run `swain_cli doctor` and `swain_cli list-generators`.
 5. Update `plan.md` (or your release notes) with the final status.
 
-### 8. After the release
+### 9. After the release
 - Announce the release (team channels, changelog, etc.).
 - Close or update GitHub issues tied to the milestone.
 - Clean up temporary artefacts such as local `tmp-sdks` directories or downloaded JRE archives.
 
 ## Troubleshooting
 - **Matrix flakes** — rerun the failing job from the Actions UI; Linux ARM64 relies on `uraimo/run-on-arch-action` and occasionally flakes.
-- **PyPI upload errors** — validate `PYPI_API_TOKEN`, ensure it has project access, and confirm the secret is present in repository settings.
+- **PyPI upload errors** — ensure the PyPI Trusted Publisher is configured for this repo and workflow. If needed, fall back to Twine with an API token.
 - **Windows packaging quirks** — reproduce locally by downloading the Temurin JDK and running `scripts/build-jre-windows.ps1` in PowerShell.
 - **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
