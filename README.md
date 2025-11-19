@@ -27,6 +27,16 @@ Notes:
 - Linux arm64 is supported (built via emulated runner).
 - Windows on ARM uses the x86_64 binary and runs under emulation.
 
+### Homebrew (macOS + Linux)
+We publish the same single-file binaries through a lightweight tap so you can manage upgrades via Homebrew.
+
+```bash
+brew tap takifouhal/swain_cli https://github.com/takifouhal/swain_cli
+brew install takifouhal/swain_cli/swain_cli
+```
+
+Homebrew installs the PyInstaller binary, so no additional Python dependencies are required. Upgrade with `brew upgrade takifouhal/swain_cli/swain_cli`.
+
 ### pip/pipx (requires Python 3.8+)
 ```bash
 pipx install swain_cli
