@@ -97,14 +97,13 @@ jobs:
         shell: pwsh
         if: ${{ matrix.shell == 'pwsh' }}
 
-      - name: Upload JRE assets to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload JRE artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: jre-${{ matrix.output }}
+          path: |
             dist/jre/${{ matrix.output }}
             dist/jre/${{ matrix.output }}.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
     name: Publish to PyPI
@@ -191,9 +190,31 @@ jobs:
             python3 -m pip install pyinstaller
             pyinstaller -n swain_cli --onefile swain_cli/cli.py
             mv dist/swain_cli dist/swain_cli-linux-arm64
-      - name: Upload binaries to release
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}
+          path: dist/swain_cli-*
+
+  release-assets:
+    name: Attach release assets
+    needs: [build-jres, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List downloaded assets
+        run: ls -R dist
+
+      - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/swain_cli-*
+          files: dist/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
