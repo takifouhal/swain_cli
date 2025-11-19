@@ -710,7 +710,8 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
     )
     schema_file = tmp_path / "swain.json"
 
-    def fake_fetch_schema(conn, token, tenant_id=None):
+    def fake_fetch_schema(base, conn, token, tenant_id=None):
+        assert base == "https://api.example.com"
         assert conn.id == connection.id
         assert token == "token-swain"
         assert tenant_id == "303"

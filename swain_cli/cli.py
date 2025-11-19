@@ -967,12 +967,18 @@ def swain_dynamic_swagger_from_connection(connection: SwainConnection) -> str:
 
 
 def fetch_swain_connection_schema(
+    base_url: str,
     connection: SwainConnection,
     token: str,
     *,
     tenant_id: Optional[Union[str, int]] = None,
 ) -> Path:
-    schema_url = swain_dynamic_swagger_from_connection(connection)
+    # Use the backend proxy so it can mint a per-connection preview JWT and
+    # authenticate against the remote CrudSQL instance on our behalf.
+    schema_url = _swain_url(
+        base_url,
+        f"connections/{connection.id}/dynamic_swagger",
+    )
     log(
         f"fetching connection dynamic swagger from {schema_url} (connection {connection.id})"
     )
@@ -1665,6 +1671,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                     )
 
                 temp_schema = fetch_swain_connection_schema(
+                    base_url,
                     selected_connection,
                     token,
                     tenant_id=tenant_id_value,
