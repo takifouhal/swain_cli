@@ -43,7 +43,7 @@ jobs:
             script: scripts/build-jre-linux.sh
             output: swain_cli-jre-linux-arm64.tar.gz
           - label: macos-x86_64
-            runner: macos-13
+            runner: macos-15
             temurin_os: mac
             temurin_arch: x64
             archive_ext: tar.gz
