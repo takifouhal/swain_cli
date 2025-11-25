@@ -22,6 +22,7 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 - 2025-11-20: v0.3.6: Default to `--skip-operation-example` (plus docs/tests suppression) to keep large CRUDSQL dynamic swagger generation from exhausting heap; version bump for release.
 - 2025-11-21: v0.3.7: Split Swain platform base vs CrudSQL `/crud` base, infer CrudSQL URL from `--swain-base-url`, and expand CLI options/tests accordingly.
 - 2025-11-21: v0.3.8: Authenticate against the CrudSQL/proxy base in interactive mode and normalize `/crud` suffix handling; updated tests.
+- 2025-11-21: v0.3.9: Add fallback to CrudSQL/proxy base when Swain project/connection discovery 404s; ensure interactive flow works against proxied `/crud` deployments.
 - 2025-09-23: Patched CLI to show help when no command is provided and prepped v0.2.1 release.
 
 

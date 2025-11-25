@@ -847,6 +847,38 @@ def fetch_swain_projects(
     return projects
 
 
+def _fetch_swain_projects_with_fallback(
+    primary_base: str,
+    fallback_base: Optional[str],
+    token: str,
+    *,
+    tenant_id: Optional[Union[str, int]] = None,
+    page_size: int = 50,
+    max_pages: int = 25,
+) -> List[SwainProject]:
+    try:
+        return fetch_swain_projects(
+            primary_base,
+            token,
+            tenant_id=tenant_id,
+            page_size=page_size,
+            max_pages=max_pages,
+        )
+    except CLIError as exc:
+        if not fallback_base or fallback_base == primary_base:
+            raise
+        message = str(exc)
+        if "404" not in message and "Not Found" not in message:
+            raise
+    return fetch_swain_projects(
+        fallback_base,
+        token,
+        tenant_id=tenant_id,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+
+
 def _connection_filter_payload(
     *, project_id: Optional[int] = None, connection_id: Optional[int] = None
 ) -> Dict[str, Any]:
@@ -985,6 +1017,41 @@ def fetch_swain_connections(
         if connection:
             connections.append(connection)
     return connections
+
+
+def _fetch_swain_connections_with_fallback(
+    primary_base: str,
+    fallback_base: Optional[str],
+    token: str,
+    *,
+    tenant_id: Optional[Union[str, int]] = None,
+    project_id: Optional[int] = None,
+    connection_id: Optional[int] = None,
+    page_size: int = 100,
+) -> List[SwainConnection]:
+    try:
+        return fetch_swain_connections(
+            primary_base,
+            token,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            connection_id=connection_id,
+            page_size=page_size,
+        )
+    except CLIError as exc:
+        if not fallback_base or fallback_base == primary_base:
+            raise
+        message = str(exc)
+        if "404" not in message and "Not Found" not in message:
+            raise
+    return fetch_swain_connections(
+        fallback_base,
+        token,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        connection_id=connection_id,
+        page_size=page_size,
+    )
 
 
 def fetch_swain_connection_by_id(
@@ -1689,12 +1756,23 @@ def handle_gen(args: SimpleNamespace) -> int:
                             ) from exc
 
                 if connection_id_value is not None:
-                    selected_connection = fetch_swain_connection_by_id(
-                        swain_base,
-                        token,
-                        connection_id_value,
-                        tenant_id=tenant_id_value,
-                    )
+                    try:
+                        selected_connection = fetch_swain_connection_by_id(
+                            swain_base,
+                            token,
+                            connection_id_value,
+                            tenant_id=tenant_id_value,
+                        )
+                    except CLIError:
+                        if crudsql_base != swain_base:
+                            selected_connection = fetch_swain_connection_by_id(
+                                crudsql_base,
+                                token,
+                                connection_id_value,
+                                tenant_id=tenant_id_value,
+                            )
+                        else:
+                            raise
                     if project_id_value is not None:
                         connection_project_id = _safe_int(
                             _pick(
@@ -1711,8 +1789,9 @@ def handle_gen(args: SimpleNamespace) -> int:
                                 "warning: connection project does not match provided project id"
                             )
                 elif project_id_value is not None:
-                    connections = fetch_swain_connections(
+                    connections = _fetch_swain_connections_with_fallback(
                         swain_base,
+                        crudsql_base if crudsql_base != swain_base else None,
                         token,
                         tenant_id=tenant_id_value,
                         project_id=project_id_value,
@@ -2005,8 +2084,11 @@ def run_interactive(args: SimpleNamespace) -> int:
             tenant_id,
             allow_prompt=True,
         )
-        projects = fetch_swain_projects(
-            swain_base, token, tenant_id=tenant_id
+        projects = _fetch_swain_projects_with_fallback(
+            swain_base,
+            crudsql_base if crudsql_base != swain_base else None,
+            token,
+            tenant_id=tenant_id,
         )
         if not projects:
             raise CLIError("no projects available on the Swain backend")
@@ -2029,8 +2111,9 @@ def run_interactive(args: SimpleNamespace) -> int:
             )
             swain_project = project_options[selected_project_id]
 
-        connections = fetch_swain_connections(
+        connections = _fetch_swain_connections_with_fallback(
             swain_base,
+            crudsql_base if crudsql_base != swain_base else None,
             token,
             tenant_id=tenant_id,
             project_id=swain_project.id,

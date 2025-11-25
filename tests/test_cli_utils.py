@@ -978,12 +978,12 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
     monkeypatch.setattr(
         cli,
         "fetch_swain_projects",
-        lambda base, token, tenant_id=None: [project],
+        lambda base, token, tenant_id=None, **_: [project],
     )
     monkeypatch.setattr(
         cli,
         "fetch_swain_connections",
-        lambda base, token, tenant_id=None, project_id=None: [connection],
+        lambda base, token, tenant_id=None, project_id=None, **_: [connection],
     )
 
     def fail_handle_gen(args):
@@ -1061,11 +1061,11 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
     seen_bases: List[str] = []
 
-    def fake_fetch_projects(base, token, tenant_id=None):
+    def fake_fetch_projects(base, token, tenant_id=None, **_):
         seen_bases.append(base)
         return [project]
 
-    def fake_fetch_connections(base, token, tenant_id=None, project_id=None):
+    def fake_fetch_connections(base, token, tenant_id=None, project_id=None, **_):
         seen_bases.append(base)
         return [connection]
 
