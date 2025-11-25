@@ -399,7 +399,8 @@ def resolve_base_urls(
     normalized_swain = _normalize_base_url(swain_base_url)
     normalized_crud = _normalize_base_url(crudsql_base_url)
 
-    swain_base = normalized_swain or _strip_trailing_crud(normalized_crud or "") or DEFAULT_SWAIN_BASE_URL
+    swain_base_candidate = normalized_swain or _strip_trailing_crud(normalized_crud or "")
+    swain_base = _strip_trailing_crud(swain_base_candidate or DEFAULT_SWAIN_BASE_URL)
     crudsql_base = normalized_crud or _ensure_crudsql_base(swain_base)
     return swain_base, crudsql_base
 
@@ -1546,7 +1547,7 @@ def prompt_select(prompt: str, choices: Sequence[Any]) -> Any:
     return result
 
 
-def interactive_auth_setup() -> None:
+def interactive_auth_setup(auth_base_url: Optional[str] = None) -> None:
     existing = resolve_auth_token()
     if existing:
         log("reusing existing authentication token")
@@ -1555,7 +1556,7 @@ def interactive_auth_setup() -> None:
         log("no authentication token configured.")
         if not prompt_confirm("Sign in before continuing?", default=True):
             raise CLIError("authentication token required; run 'swain_cli auth login'")
-    args = SimpleNamespace(username=None, password=None, auth_base_url=None)
+    args = SimpleNamespace(username=None, password=None, auth_base_url=auth_base_url)
     token = read_login_token(args)
     persist_auth_token(token, getattr(args, "login_refresh_token", None))
 
@@ -1982,10 +1983,12 @@ def guess_default_output_dir() -> str:
 def run_interactive(args: SimpleNamespace) -> int:
     log("interactive SDK generation wizard")
     log("press Ctrl+C at any time to cancel")
-    interactive_auth_setup()
     crudsql_base_arg = getattr(args, "crudsql_url", None)
     swain_base_arg = getattr(args, "swain_base_url", None)
     swain_base, crudsql_base = resolve_base_urls(swain_base_arg, crudsql_base_arg)
+    # Authenticate against the CrudSQL surface (proxy or direct) since auth endpoints
+    # live there; Swain discovery continues to use the platform base without /crud.
+    interactive_auth_setup(auth_base_url=crudsql_base)
     dynamic_swagger_url: Optional[str] = None
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None

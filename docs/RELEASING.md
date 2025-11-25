@@ -99,6 +99,10 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 - **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
 ## Historical release notes
+### v0.3.8
+- Interactive auth now targets the CrudSQL (or proxied) base, matching `/crud/auth/*` deployments; improved `/crud` suffix normalization.
+- Added regression tests to lock base URL inference.
+
 ### v0.3.7
 - Differentiate Swain platform base from CrudSQL base; `--swain-base-url` now infers `/crud` for dynamic swagger while Swain discovery/auth stay on the platform host.
 - Added explicit `--swain-base-url` to interactive/gen flows and updated tests.

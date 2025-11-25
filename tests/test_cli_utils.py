@@ -465,9 +465,9 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
 
     monkeypatch.setattr(cli, "persist_auth_token", fake_persist)
 
-    cli.interactive_auth_setup()
+    cli.interactive_auth_setup(auth_base_url="https://auth.example.com")
 
-    assert captured_args["auth_base_url"] is None
+    assert captured_args["auth_base_url"] == "https://auth.example.com"
     assert captured_persist["token"] == "credential-token"
     assert captured_persist["refresh"] == "refresh-token"
 
@@ -618,6 +618,14 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
     assert captured["swain_base"] == "https://api.example.com"
     assert captured["crud_base"] == "https://api.example.com/crud"
     assert not schema_file.exists()
+
+
+def test_resolve_base_urls_strips_trailing_crud():
+    swain_base, crud_base = cli.resolve_base_urls(
+        "https://dev-api.swain.technology/crud", None
+    )
+    assert swain_base == "https://dev-api.swain.technology"
+    assert crud_base == "https://dev-api.swain.technology/crud"
 
 
 def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
@@ -960,7 +968,7 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
 
     monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
     monkeypatch.setattr(cli, "prompt_text", fake_text)
-    monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
+    monkeypatch.setattr(cli, "interactive_auth_setup", lambda auth_base_url=None: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
     monkeypatch.setattr(
         cli,
@@ -1033,7 +1041,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
     monkeypatch.setattr(cli, "prompt_text", fake_text)
     monkeypatch.setattr(cli, "prompt_select", lambda prompt, choices: choices[0].value)
-    monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
+    monkeypatch.setattr(cli, "interactive_auth_setup", lambda auth_base_url=None: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
 
     dynamic_bases: List[str] = []
