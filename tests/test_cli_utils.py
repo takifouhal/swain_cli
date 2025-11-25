@@ -101,6 +101,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
         captured["java_opts"] = getattr(args, "java_opts", None)
         captured["generator_args"] = getattr(args, "generator_args", None)
         captured["crudsql_url"] = getattr(args, "crudsql_url", None)
+        captured["swain_base_url"] = getattr(args, "swain_base_url", None)
         return 0
 
     monkeypatch.setattr(cli, "handle_interactive", fake_handle_interactive)
@@ -126,7 +127,8 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
         "--global-property=apis=Foo",
         "--skip-operation-example",
     ]
-    assert captured.get("crudsql_url") == "https://api.override"
+    assert captured.get("swain_base_url") == "https://api.override"
+    assert captured.get("crudsql_url") is None
 
 
 def test_build_generate_command_alias(tmp_path):
@@ -569,13 +571,62 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     assert os.path.isdir(args.out)
 
 
+def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    captured: Dict[str, Any] = {}
+
+    def fake_fetch(base, token, tenant_id=None):
+        captured["crud_base"] = base
+        schema_file.write_text("{}")
+        return schema_file
+
+    def fake_determine(base, token, provided, *, allow_prompt):
+        captured["swain_base"] = base
+        return "11"
+
+    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-abc")
+    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(
+        cli,
+        "run_openapi_generator",
+        lambda jar, engine, cmd, java_opts: (0, ""),
+    )
+
+    args = SimpleNamespace(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url=None,
+        swain_base_url="https://api.example.com",
+        swain_project_id=None,
+        swain_connection_id=None,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=None,
+        generator_arg=None,
+        swain_tenant_id=None,
+        property=[],
+        skip_validate_spec=False,
+        verbose=False,
+    )
+
+    assert cli.handle_gen(args) == 0
+    assert captured["swain_base"] == "https://api.example.com"
+    assert captured["crud_base"] == "https://api.example.com/crud"
+    assert not schema_file.exists()
+
+
 def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
 
     monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "202")
 
     def fake_fetch(url, token, tenant_id=None):
-        assert url == cli.DEFAULT_CRUDSQL_BASE_URL
+        assert url == cli.DEFAULT_CRUDSQL_API_BASE_URL
         assert token == "token-default"
         assert tenant_id == "202"
         schema_file.write_text("{}")
@@ -984,7 +1035,15 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     monkeypatch.setattr(cli, "prompt_select", lambda prompt, choices: choices[0].value)
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
-    
+
+    dynamic_bases: List[str] = []
+
+    def fake_dynamic_swagger(base):
+        dynamic_bases.append(base)
+        return f"{base}/api/dynamic_swagger"
+
+    monkeypatch.setattr(cli, "crudsql_dynamic_swagger_url", fake_dynamic_swagger)
+
     def fake_determine(base, token, provided, *, allow_prompt):
         assert base == "https://api.example.com"
         assert token == "token-xyz"
@@ -1018,7 +1077,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
             generator_version=None,
             java_opts=["-Xmx5g"],
             generator_args=["--global-property=apis=Job"],
-            crudsql_url="https://api.example.com",
+            swain_base_url="https://api.example.com",
         )
     )
     assert result == 0
@@ -1033,4 +1092,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         f"--global-property={cli.GLOBAL_PROPERTY_DISABLE_DOCS}",
         cli.SKIP_OPERATION_EXAMPLE_FLAG,
     ]
+    assert passed_args.swain_base_url == "https://api.example.com"
+    assert passed_args.crudsql_url is None
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]
+    assert dynamic_bases == ["https://api.example.com/crud"]

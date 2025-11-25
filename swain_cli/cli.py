@@ -50,7 +50,11 @@ FALLBACK_JAVA_HEAP_OPTION = "-Xmx14g"
 OOM_MARKERS = ("OutOfMemoryError", "GC overhead limit exceeded")
 GLOBAL_PROPERTY_DISABLE_DOCS = "apiDocs=false,apiTests=false,modelDocs=false,modelTests=false"
 SKIP_OPERATION_EXAMPLE_FLAG = "--skip-operation-example"
-DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
+DEFAULT_SWAIN_BASE_URL = "https://api.swain.technology"
+# Alias retained for compatibility; historically the CLI used this value for the
+# Swain platform base URL.
+DEFAULT_CRUDSQL_BASE_URL = DEFAULT_SWAIN_BASE_URL
+DEFAULT_CRUDSQL_API_BASE_URL = f"{DEFAULT_SWAIN_BASE_URL.rstrip('/')}/crud"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
 EXIT_CODE_INTERRUPT = 130
@@ -355,6 +359,49 @@ def require_auth_token(purpose: str = "perform this action") -> str:
             f"authentication token required to {purpose}; run 'swain_cli auth login'"
         )
     return token
+
+
+def _normalize_base_url(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _strip_trailing_crud(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/crud"):
+        return normalized[: -len("/crud")]
+    return normalized
+
+
+def _ensure_crudsql_base(swain_base_url: str) -> str:
+    normalized = swain_base_url.rstrip("/")
+    if normalized.endswith("/crud"):
+        return normalized
+    return f"{normalized}/crud"
+
+
+def resolve_base_urls(
+    swain_base_url: Optional[str],
+    crudsql_base_url: Optional[str],
+) -> Tuple[str, str]:
+    """
+    Determine the Swain platform base and CrudSQL base URLs.
+
+    - Swain operations (auth, project/connection discovery) use swain_base_url.
+    - CrudSQL operations (dynamic swagger, schema discovery) use crudsql_base_url.
+    - When only swain_base_url is provided, the CrudSQL base is inferred by
+      appending '/crud'.
+    - When only crudsql_base_url is provided, the Swain base falls back to the
+      CrudSQL host with a trailing '/crud' stripped if present.
+    """
+    normalized_swain = _normalize_base_url(swain_base_url)
+    normalized_crud = _normalize_base_url(crudsql_base_url)
+
+    swain_base = normalized_swain or _strip_trailing_crud(normalized_crud or "") or DEFAULT_SWAIN_BASE_URL
+    crudsql_base = normalized_crud or _ensure_crudsql_base(swain_base)
+    return swain_base, crudsql_base
 
 
 def crudsql_dynamic_swagger_url(base_url: str) -> str:
@@ -1580,16 +1627,13 @@ def handle_gen(args: SimpleNamespace) -> int:
     engine = args.engine
     schema_arg = getattr(args, "schema", None)
     crudsql_url = getattr(args, "crudsql_url", None)
+    swain_base_url = getattr(args, "swain_base_url", None)
     swain_project_id = getattr(args, "swain_project_id", None)
     swain_connection_id = getattr(args, "swain_connection_id", None)
     swain_tenant_id = getattr(args, "swain_tenant_id", None)
     temp_schema: Optional[Path] = None
     selected_connection: Optional[SwainConnection] = None
-    base_url = (
-        crudsql_url.strip()
-        if isinstance(crudsql_url, str) and crudsql_url.strip()
-        else DEFAULT_CRUDSQL_BASE_URL
-    )
+    swain_base, crudsql_base = resolve_base_urls(swain_base_url, crudsql_url)
 
     tenant_id_cache: Optional[str] = None
 
@@ -1597,7 +1641,7 @@ def handle_gen(args: SimpleNamespace) -> int:
         nonlocal tenant_id_cache
         if tenant_id_cache is None:
             tenant_id_cache = determine_swain_tenant_id(
-                base_url,
+                swain_base,
                 token,
                 swain_tenant_id,
                 allow_prompt=False,
@@ -1645,7 +1689,7 @@ def handle_gen(args: SimpleNamespace) -> int:
 
                 if connection_id_value is not None:
                     selected_connection = fetch_swain_connection_by_id(
-                        base_url,
+                        swain_base,
                         token,
                         connection_id_value,
                         tenant_id=tenant_id_value,
@@ -1667,7 +1711,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                             )
                 elif project_id_value is not None:
                     connections = fetch_swain_connections(
-                        base_url,
+                        swain_base,
                         token,
                         tenant_id=tenant_id_value,
                         project_id=project_id_value,
@@ -1687,7 +1731,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                     )
 
                 temp_schema = fetch_swain_connection_schema(
-                    base_url,
+                    swain_base,
                     selected_connection,
                     token,
                     tenant_id=tenant_id_value,
@@ -1701,7 +1745,7 @@ def handle_gen(args: SimpleNamespace) -> int:
                 )
             else:
                 temp_schema = fetch_crudsql_schema(
-                    base_url,
+                    crudsql_base,
                     token,
                     tenant_id=tenant_id_value,
                 )
@@ -1872,7 +1916,7 @@ def handle_engine_use_embedded(_: SimpleNamespace) -> int:
 def read_login_token(args: SimpleNamespace) -> str:
     username = getattr(args, "username", None)
     password = getattr(args, "password", None)
-    auth_base = getattr(args, "auth_base_url", None) or DEFAULT_CRUDSQL_BASE_URL
+    auth_base = getattr(args, "auth_base_url", None) or DEFAULT_SWAIN_BASE_URL
 
     if not username:
         username = prompt_text("Username or email")
@@ -1940,11 +1984,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     log("press Ctrl+C at any time to cancel")
     interactive_auth_setup()
     crudsql_base_arg = getattr(args, "crudsql_url", None)
-    crudsql_base = (
-        crudsql_base_arg.strip()
-        if isinstance(crudsql_base_arg, str) and crudsql_base_arg.strip()
-        else DEFAULT_CRUDSQL_BASE_URL
-    )
+    swain_base_arg = getattr(args, "swain_base_url", None)
+    swain_base, crudsql_base = resolve_base_urls(swain_base_arg, crudsql_base_arg)
     dynamic_swagger_url: Optional[str] = None
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None
@@ -1956,13 +1997,13 @@ def run_interactive(args: SimpleNamespace) -> int:
         dynamic_swagger_url = crudsql_dynamic_swagger_url(crudsql_base)
         token = require_auth_token("discover Swain projects and connections")
         tenant_id = determine_swain_tenant_id(
-            crudsql_base,
+            swain_base,
             token,
             tenant_id,
             allow_prompt=True,
         )
         projects = fetch_swain_projects(
-            crudsql_base, token, tenant_id=tenant_id
+            swain_base, token, tenant_id=tenant_id
         )
         if not projects:
             raise CLIError("no projects available on the Swain backend")
@@ -1986,7 +2027,7 @@ def run_interactive(args: SimpleNamespace) -> int:
             swain_project = project_options[selected_project_id]
 
         connections = fetch_swain_connections(
-            crudsql_base,
+            swain_base,
             token,
             tenant_id=tenant_id,
             project_id=swain_project.id,
@@ -2075,8 +2116,11 @@ def run_interactive(args: SimpleNamespace) -> int:
     out_value = str(Path(out_dir_input).expanduser())
     generator_args = ensure_generator_arg_defaults(generator_args)
     log("configuration preview")
+    swain_base_override = _normalize_base_url(swain_base_arg)
+    crudsql_base_override = _normalize_base_url(crudsql_base_arg)
     if swain_connection and swain_project:
-        log(f"  swain base: {crudsql_base}")
+        log(f"  swain base: {swain_base}")
+        log(f"  crudsql base: {crudsql_base}")
         log(f"  project: {swain_project.name} (#{swain_project.id})")
         log(
             "  connection:"
@@ -2087,6 +2131,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         if tenant_id:
             log(f"  tenant: {tenant_id}")
     elif crudsql_base:
+        log(f"  swain base: {swain_base}")
         log(f"  crudsql base: {crudsql_base}")
         log(f"  dynamic swagger: {schema_display}")
         if tenant_id:
@@ -2117,16 +2162,13 @@ def run_interactive(args: SimpleNamespace) -> int:
     command_preview.append("gen")
     if tenant_id:
         command_preview.extend(["--swain-tenant-id", tenant_id])
+    if swain_base_override:
+        command_preview.extend(["--swain-base-url", swain_base])
+    if crudsql_base_override:
+        command_preview.extend(["--crudsql-url", crudsql_base])
     if swain_connection and swain_project:
-        if crudsql_base and crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
-            command_preview.extend(["--crudsql-url", crudsql_base])
         command_preview.extend(["--swain-project-id", str(swain_project.id)])
         command_preview.extend(["--swain-connection-id", str(swain_connection.id)])
-    elif crudsql_base:
-        if crudsql_base != DEFAULT_CRUDSQL_BASE_URL:
-            command_preview.extend(["--crudsql-url", crudsql_base])
-    else:
-        command_preview.extend(["-i", schema_value])
     command_preview.extend(["-o", out_value])
     for lang in languages:
         command_preview.extend(["-l", lang])
@@ -2162,7 +2204,8 @@ def run_interactive(args: SimpleNamespace) -> int:
         generator_version=args.generator_version,
         engine=engine_choice,
         schema=None if crudsql_base else schema_value,
-        crudsql_url=crudsql_base,
+        crudsql_url=crudsql_base if crudsql_base_override else None,
+        swain_base_url=swain_base,
         swain_project_id=swain_project.id if swain_project else None,
         swain_connection_id=swain_connection.id if swain_connection else None,
         swain_tenant_id=tenant_id,
@@ -2241,7 +2284,12 @@ def gen(
     crudsql_url: Optional[str] = typer.Option(
         None,
         "--crudsql-url",
-        help=f"CrudSQL base URL to pull dynamic swagger (default: {DEFAULT_CRUDSQL_BASE_URL})",
+        help=f"CrudSQL base URL to pull dynamic swagger (default: {DEFAULT_CRUDSQL_API_BASE_URL})",
+    ),
+    swain_base_url: Optional[str] = typer.Option(
+        None,
+        "--swain-base-url",
+        help=f"Swain platform base URL (default: {DEFAULT_SWAIN_BASE_URL})",
     ),
     lang: List[str] = typer.Option(
         [],
@@ -2312,6 +2360,7 @@ def gen(
         engine=engine.lower(),
         schema=schema,
         crudsql_url=crudsql_url,
+        swain_base_url=swain_base_url,
         out=out,
         languages=[entry.lower() for entry in lang],
         config=config,
@@ -2347,17 +2396,22 @@ def interactive(
         "--generator-arg",
         help="raw OpenAPI Generator argument (repeatable)",
     ),
-    crudsql_url: Optional[str] = typer.Option(
+    swain_base_url: Optional[str] = typer.Option(
         None,
         "--swain-base-url",
+        help=f"Swain platform base URL (default: {DEFAULT_SWAIN_BASE_URL})",
+    ),
+    crudsql_url: Optional[str] = typer.Option(
+        None,
         "--crudsql-url",
-        help=f"Swain base URL for dynamic schema (default: {DEFAULT_CRUDSQL_BASE_URL})",
+        help=f"CrudSQL base URL override (default: derived from Swain base, e.g. {DEFAULT_CRUDSQL_API_BASE_URL})",
     ),
 ) -> None:
     args = SimpleNamespace(
         generator_version=ctx.obj.generator_version,
         java_opts=java_opt,
         generator_args=generator_arg,
+        swain_base_url=swain_base_url,
         crudsql_url=crudsql_url,
     )
     try:
@@ -2384,7 +2438,7 @@ def auth_login(
     auth_base_url: Optional[str] = typer.Option(
         None,
         "--auth-base-url",
-        help=f"Authentication base URL (default: {DEFAULT_CRUDSQL_BASE_URL})",
+        help=f"Authentication base URL (default: {DEFAULT_SWAIN_BASE_URL})",
     ),
 ) -> None:
     args = SimpleNamespace(

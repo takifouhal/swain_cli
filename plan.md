@@ -20,6 +20,7 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
  - 2025-11-14: v0.3.4: Robust checksum parsing across GNU/BSD/PowerShell formats; Windows build emits standard `<hex>  <filename>` `.sha256` files; added tests.
 - 2025-11-19: v0.3.5: Teach `fetch_swain_connection_schema` to accept a `base_url` argument for constructing the schema URL and update tests to assert the base URL is passed through.
 - 2025-11-20: v0.3.6: Default to `--skip-operation-example` (plus docs/tests suppression) to keep large CRUDSQL dynamic swagger generation from exhausting heap; version bump for release.
+- 2025-11-21: v0.3.7: Split Swain platform base vs CrudSQL `/crud` base, infer CrudSQL URL from `--swain-base-url`, and expand CLI options/tests accordingly.
 - 2025-09-23: Patched CLI to show help when no command is provided and prepped v0.2.1 release.
 
 
