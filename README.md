@@ -67,6 +67,7 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 - Swain project integration: provide `--swain-project-id` and `--swain-connection-id` to resolve the deployed connection swagger automatically after authenticating. The CLI will find the active build, fetch `/api/dynamic_swagger`, and feed it to the generator.
 - JVM tuning: runs start with `-Xms2g -Xmx10g -XX:+UseG1GC`. If the build still runs out of memory the CLI retries at `-Xmx14g`. Supply extra options with `--java-opt` (repeatable) or export `SWAIN_CLI_JAVA_OPTS`.
 - Docs/tests are disabled by default via `--global-property=apiDocs=false,apiTests=false,modelDocs=false,modelTests=false`; override with your own `--generator-arg` when you need them.
+- Operation examples are skipped by default (`--skip-operation-example`) to avoid OpenAPI Generator blowing up on circular schemas; pass your own generator arg to opt back in if you really need them.
 - To match modern OAS defaults the CLI automatically adds `-p disallowAdditionalPropertiesIfNotPresent=false`. Opt into stricter behaviour with `-p disallowAdditionalPropertiesIfNotPresent=true` or a generator config file.
 - The `typescript` shortcut maps to `typescript-axios`; request `typescript-fetch` explicitly when you need that runtime.
 

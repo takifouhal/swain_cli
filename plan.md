@@ -16,9 +16,10 @@ Below is a single, implementation‑ready document, it makes concrete choices wh
 - 2025-09-20: Built macOS x86_64 trimmed JRE, regenerated macOS arm64 JRE to capture new checksum, and updated `swain_cli/cli.py` with both SHA-256 values.
 - 2025-09-21: Added Apache-2.0 LICENSE, documented dev workflow, wired release build-jres job (Linux/Windows/macOS), taught CLI to consume release checksum files with basic tests, introduced cross-platform CI, and validated the matrix in run [#17884613705](https://github.com/takifouhal/swain_cli/actions/runs/17884613705).
 - 2025-09-22: Adopted Typer/httpx/questionary/platformdirs/keyring/pooch across the CLI, refreshed docs/tests, and confirmed `swain_cli doctor` works post-migration.
- - 2025-11-14: Bumped package to v0.3.3, updated JRE ASSET_BASE to v0.3.2 release assets to fix 404s on first-run downloads, refreshed installer examples, and cut release tag v0.3.3.
+- 2025-11-14: Bumped package to v0.3.3, updated JRE ASSET_BASE to v0.3.2 release assets to fix 404s on first-run downloads, refreshed installer examples, and cut release tag v0.3.3.
  - 2025-11-14: v0.3.4: Robust checksum parsing across GNU/BSD/PowerShell formats; Windows build emits standard `<hex>  <filename>` `.sha256` files; added tests.
 - 2025-11-19: v0.3.5: Teach `fetch_swain_connection_schema` to accept a `base_url` argument for constructing the schema URL and update tests to assert the base URL is passed through.
+- 2025-11-20: v0.3.6: Default to `--skip-operation-example` (plus docs/tests suppression) to keep large CRUDSQL dynamic swagger generation from exhausting heap; version bump for release.
 - 2025-09-23: Patched CLI to show help when no command is provided and prepped v0.2.1 release.
 
 

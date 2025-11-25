@@ -562,6 +562,9 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     assert cli.handle_gen(args) == 0
     assert "cmd" in captured
     assert captured.get("java_opts") == cli.DEFAULT_JAVA_OPTS
+    cmd = captured["cmd"]
+    assert cli.SKIP_OPERATION_EXAMPLE_FLAG in cmd
+    assert any(cli.GLOBAL_PROPERTY_DISABLE_DOCS in part for part in cmd)
     assert not schema_file.exists()
     assert os.path.isdir(args.out)
 
@@ -1028,5 +1031,6 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.generator_arg == [
         "--global-property=apis=Job",
         f"--global-property={cli.GLOBAL_PROPERTY_DISABLE_DOCS}",
+        cli.SKIP_OPERATION_EXAMPLE_FLAG,
     ]
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]

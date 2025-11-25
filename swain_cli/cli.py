@@ -49,6 +49,7 @@ DEFAULT_JAVA_OPTS = ["-Xms2g", "-Xmx10g", "-XX:+UseG1GC"]
 FALLBACK_JAVA_HEAP_OPTION = "-Xmx14g"
 OOM_MARKERS = ("OutOfMemoryError", "GC overhead limit exceeded")
 GLOBAL_PROPERTY_DISABLE_DOCS = "apiDocs=false,apiTests=false,modelDocs=false,modelTests=false"
+SKIP_OPERATION_EXAMPLE_FLAG = "--skip-operation-example"
 DEFAULT_CRUDSQL_BASE_URL = "https://api.swain.technology"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
@@ -1327,6 +1328,21 @@ def generator_args_disable_docs(generator_args: Sequence[str]) -> bool:
     return False
 
 
+def generator_args_skip_examples(generator_args: Sequence[str]) -> bool:
+    return any(
+        arg.startswith(SKIP_OPERATION_EXAMPLE_FLAG) for arg in generator_args
+    )
+
+
+def ensure_generator_arg_defaults(generator_args: Sequence[str]) -> List[str]:
+    result = list(generator_args)
+    if not generator_args_disable_docs(result):
+        result.append(f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}")
+    if not generator_args_skip_examples(result):
+        result.append(SKIP_OPERATION_EXAMPLE_FLAG)
+    return result
+
+
 def command_disables_docs(cmd: Sequence[str]) -> bool:
     for idx, part in enumerate(cmd):
         if part == "--global-property":
@@ -1707,11 +1723,7 @@ def handle_gen(args: SimpleNamespace) -> int:
             addl_props.append("disallowAdditionalPropertiesIfNotPresent=false")
         setattr(args, "additional_properties", addl_props)
         raw_generator_args = getattr(args, "generator_arg", None) or []
-        generator_args = list(raw_generator_args)
-        if not generator_args_disable_docs(generator_args):
-            generator_args.append(
-                f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}"
-            )
+        generator_args = ensure_generator_arg_defaults(raw_generator_args)
         setattr(args, "generator_arg", generator_args)
 
         resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
@@ -2061,8 +2073,7 @@ def run_interactive(args: SimpleNamespace) -> int:
         schema_display = schema_value
 
     out_value = str(Path(out_dir_input).expanduser())
-    if not generator_args_disable_docs(generator_args):
-        generator_args.append(f"--global-property={GLOBAL_PROPERTY_DISABLE_DOCS}")
+    generator_args = ensure_generator_arg_defaults(generator_args)
     log("configuration preview")
     if swain_connection and swain_project:
         log(f"  swain base: {crudsql_base}")
