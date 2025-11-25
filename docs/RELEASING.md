@@ -99,6 +99,9 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 - **Stale caches** — when the embedded JRE changes, remind users to run `swain_cli engine install-jre` or delete the cache path reported by `swain_cli doctor`.
 
 ## Historical release notes
+### v0.3.10
+- Refresh macOS arm64 embedded JRE SHA-256 to match released asset; fixes hash mismatch on first-run download.
+
 ### v0.3.9
 - Add fallback to CrudSQL/proxy base for Swain project/connection discovery when `/api/Project` returns 404; keeps interactive flows working behind `/crud` proxies.
 - Regression tests updated for fallback behavior.

@@ -104,7 +104,7 @@ JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
     ),
     ("macos", "arm64"): JREAsset(
         "swain_cli-jre-macos-arm64.tar.gz",
-        "f4bdfa2bd54a2257e8b9f77a50c61e4709ebbddb296b0370955de35d84c79964",
+        "770b81834bdcb70b9af0fe6c7b5e24ed287553f91380e543862e59f9bb72f9ea",
         "swain_cli-jre-macos-arm64.tar.gz.sha256",
     ),
     ("windows", "x86_64"): JREAsset(
