@@ -31,6 +31,7 @@ import typer
 from platformdirs import PlatformDirs
 
 PINNED_GENERATOR_VERSION = "7.6.0"
+PINNED_GENERATOR_SHA256 = "35074bdd3cdfc46be9a902e11a54a3faa3cae1e34eb66cbd959d1c8070bbd7d7"
 JRE_VERSION = "21.0.4"
 # JRE assets were renamed after v0.3.0; use v0.3.2 where
 # the filenames match entries in JRE_ASSETS.
@@ -38,6 +39,7 @@ ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.3.2"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
+ENGINE_ENV_VAR = "SWAIN_CLI_ENGINE"
 TENANT_ID_ENV_VAR = "SWAIN_CLI_TENANT_ID"
 TENANT_HEADER_NAME = "X-Tenant-ID"
 KEYRING_SERVICE = "swain_cli"
@@ -69,7 +71,6 @@ COMMON_LANGUAGES = [
     "kotlin",
     "swift",
 ]
-VENDOR_JAR_NAME = f"openapi-generator-cli-{PINNED_GENERATOR_VERSION}.jar"
 HTTP_TIMEOUT_SECONDS = 30.0
 
 app = typer.Typer(help="swain_cli CLI")
@@ -128,7 +129,6 @@ class EngineSnapshot:
     platform: PlatformInfo
     runtime_dir: Path
     embedded_java: Optional[Path]
-    vendor_jar: Optional[Path]
     selected_generator: Optional[Path]
     selected_generator_error: Optional[str]
     cached_jars: List[str]
@@ -251,47 +251,38 @@ def normalize_arch(machine: str) -> str:
     return value
 
 
-def cache_root() -> Path:
+def cache_root(*, create: bool = True) -> Path:
     explicit = os.environ.get(CACHE_ENV_VAR)
     if explicit:
         root = Path(explicit).expanduser()
     else:
         dirs = PlatformDirs(appname=DEFAULT_CACHE_DIR_NAME, appauthor=False, roaming=True)
         root = Path(dirs.user_cache_path)
-    root.mkdir(parents=True, exist_ok=True)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def jre_install_dir() -> Path:
+def jre_install_dir(*, create: bool = True) -> Path:
     info = get_platform_info()
-    path = cache_root() / "jre" / f"{info.os_name}-{info.arch}"
-    path.mkdir(parents=True, exist_ok=True)
+    path = cache_root(create=create) / "jre" / f"{info.os_name}-{info.arch}"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def jar_cache_dir() -> Path:
-    path = cache_root() / "jars"
-    path.mkdir(parents=True, exist_ok=True)
+def jar_cache_dir(*, create: bool = True) -> Path:
+    path = cache_root(create=create) / "jars"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def downloads_dir() -> Path:
-    path = cache_root() / "downloads"
-    path.mkdir(parents=True, exist_ok=True)
+def downloads_dir(*, create: bool = True) -> Path:
+    path = cache_root(create=create) / "downloads"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def vendor_jar_path() -> Path:
-    return Path(__file__).resolve().parent / "vendor" / VENDOR_JAR_NAME
-
-
-def assets_dir() -> Path:
-    return Path(__file__).resolve().parent / "assets"
-
-
-def find_vendor_jar() -> Optional[Path]:
-    jar_path = vendor_jar_path()
-    return jar_path if jar_path.exists() else None
 
 
 def load_auth_state() -> AuthState:
@@ -1185,16 +1176,6 @@ def resolve_asset_sha256(asset: JREAsset) -> str:
     return parse_checksum_file(checksum_path)
 
 
-def _bundled_asset_path(name: str) -> Optional[Path]:
-    package_assets = assets_dir() / name
-    if package_assets.exists():
-        return package_assets
-    project_root_candidate = Path(__file__).resolve().parent.parent / name
-    if project_root_candidate.exists():
-        return project_root_candidate
-    return None
-
-
 def _sha256_digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1228,14 +1209,6 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
         else:
             return target
 
-    bundled = _bundled_asset_path(asset_name)
-    if bundled:
-        _verify_sha256(bundled, sha256)
-        if bundled.resolve() != target.resolve():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(bundled, target)
-        return target
-
     known_hash = f"sha256:{sha256}" if sha256 else None
     try:
         return Path(
@@ -1249,13 +1222,6 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
             )
         )
     except httpx.HTTPError as exc:
-        bundled = _bundled_asset_path(asset_name)
-        if bundled:
-            _verify_sha256(bundled, sha256)
-            if bundled.resolve() != target.resolve():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(bundled, target)
-            return target
         raise CLIError(
             f"failed to download embedded JRE asset {asset_name}: {exc}"
         ) from exc
@@ -1312,6 +1278,8 @@ def java_binary_name() -> str:
 
 
 def find_embedded_java(root: Path) -> Optional[Path]:
+    if not root.exists():
+        return None
     candidate = root / "bin" / java_binary_name()
     if candidate.exists():
         return candidate
@@ -1323,13 +1291,12 @@ def find_embedded_java(root: Path) -> Optional[Path]:
 
 def collect_engine_snapshot(generator_version: Optional[str]) -> EngineSnapshot:
     info = get_platform_info()
-    runtime_dir = jre_install_dir()
+    runtime_dir = jre_install_dir(create=False)
     embedded_java = find_embedded_java(runtime_dir)
-    vendor = find_vendor_jar()
     selected: Optional[Path] = None
     selected_error: Optional[str] = None
     try:
-        selected = resolve_generator_jar(generator_version)
+        selected = resolve_generator_jar(generator_version, allow_download=False)
     except CLIError as exc:
         selected_error = str(exc)
     cached = list_cached_jars()
@@ -1338,7 +1305,6 @@ def collect_engine_snapshot(generator_version: Optional[str]) -> EngineSnapshot:
         platform=info,
         runtime_dir=runtime_dir,
         embedded_java=embedded_java,
-        vendor_jar=vendor,
         selected_generator=selected,
         selected_generator_error=selected_error,
         cached_jars=cached,
@@ -1359,9 +1325,6 @@ def emit_engine_snapshot(
     log(
         f"embedded java: {snapshot.embedded_java if snapshot.embedded_java else 'not installed'}"
     )
-    log(
-        f"bundled generator jar: {snapshot.vendor_jar if snapshot.vendor_jar else 'missing'}"
-    )
     if include_selected_generator:
         if snapshot.selected_generator:
             log(f"selected generator jar: {snapshot.selected_generator}")
@@ -1379,21 +1342,16 @@ def emit_engine_snapshot(
     )
 
 
-def resolve_generator_jar(version: Optional[str]) -> Path:
+def resolve_generator_jar(version: Optional[str], *, allow_download: bool = True) -> Path:
     chosen = version or os.environ.get("SWAIN_CLI_GENERATOR_VERSION")
     if not chosen:
         chosen = PINNED_GENERATOR_VERSION
-    if chosen == PINNED_GENERATOR_VERSION:
-        vendor = find_vendor_jar()
-        if vendor:
-            return vendor
-        # No bundled jar; ensure the pinned version is downloaded to cache.
-        return ensure_generator_jar(PINNED_GENERATOR_VERSION)
-    jar_path = jar_cache_dir() / chosen / f"openapi-generator-cli-{chosen}.jar"
+    jar_path = jar_cache_dir(create=False) / chosen / f"openapi-generator-cli-{chosen}.jar"
     if jar_path.exists():
         return jar_path
     if chosen == PINNED_GENERATOR_VERSION:
-        # Should not happen because we auto-download above, but keep a friendly error.
+        if allow_download:
+            return ensure_generator_jar(PINNED_GENERATOR_VERSION)
         raise CLIError(
             "OpenAPI Generator jar missing; run 'swain_cli engine update-jar --version 7.6.0'"
         )
@@ -1411,12 +1369,17 @@ def ensure_generator_jar(version: str) -> Path:
         "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/"
         f"{version}/openapi-generator-cli-{version}.jar"
     )
+    known_hash = (
+        f"sha256:{PINNED_GENERATOR_SHA256}"
+        if version == PINNED_GENERATOR_VERSION
+        else None
+    )
     target = Path(
         pooch.retrieve(
             url=url,
             path=jar_path.parent,
             fname=jar_path.name,
-            known_hash=None,
+            known_hash=known_hash,
             downloader=HTTPX_DOWNLOADER,
             progressbar=False,
         )
@@ -1920,7 +1883,9 @@ def handle_doctor(args: SimpleNamespace) -> int:
 
 
 def list_cached_jars() -> List[str]:
-    base = jar_cache_dir()
+    base = jar_cache_dir(create=False)
+    if not base.exists():
+        return []
     entries: List[str] = []
     for version_dir in sorted(base.iterdir()):
         if not version_dir.is_dir():
@@ -1973,7 +1938,8 @@ def handle_engine_update_jar(args: SimpleNamespace) -> int:
 def handle_engine_use_system(_: SimpleNamespace) -> int:
     message = textwrap.dedent(
         """
-        To use the system Java runtime, append '--engine system' to swain_cli commands.
+        To use the system Java runtime, append '--engine system' to swain_cli commands
+        (or export SWAIN_CLI_ENGINE=system).
         Example: swain_cli gen --engine system -i schema.yaml -l python -o sdks
         """
     ).strip()
@@ -2074,6 +2040,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     tenant_id: Optional[str] = None
     java_cli_opts: List[str] = list(getattr(args, "java_opts", []))
     generator_args: List[str] = list(getattr(args, "generator_args", None) or [])
+    engine_choice = getattr(args, "engine", "embedded") or "embedded"
+    engine_choice = str(engine_choice).lower()
 
     try:
         dynamic_swagger_url = crudsql_dynamic_swagger_url(crudsql_base)
@@ -2182,7 +2150,6 @@ def run_interactive(args: SimpleNamespace) -> int:
 
         sys_props: List[str] = []
 
-        engine_choice = "embedded"
         skip_validate = False
         verbose = False
 
@@ -2345,8 +2312,9 @@ def list_generators(
     engine: str = typer.Option(
         "embedded",
         "--engine",
+        envvar=ENGINE_ENV_VAR,
         case_sensitive=False,
-        help="select Java runtime (default: embedded)",
+        help=f"select Java runtime (default: embedded, or set {ENGINE_ENV_VAR})",
         show_choices=True,
     ),
 ) -> None:
@@ -2436,8 +2404,9 @@ def gen(
     engine: str = typer.Option(
         "embedded",
         "--engine",
+        envvar=ENGINE_ENV_VAR,
         case_sensitive=False,
-        help="select Java runtime (default: embedded)",
+        help=f"select Java runtime (default: embedded, or set {ENGINE_ENV_VAR})",
         show_choices=True,
     ),
 ) -> None:
@@ -2492,6 +2461,14 @@ def interactive(
         "--crudsql-url",
         help=f"CrudSQL base URL override (default: derived from Swain base, e.g. {DEFAULT_CRUDSQL_API_BASE_URL})",
     ),
+    engine: str = typer.Option(
+        "embedded",
+        "--engine",
+        envvar=ENGINE_ENV_VAR,
+        case_sensitive=False,
+        help=f"select Java runtime (default: embedded, or set {ENGINE_ENV_VAR})",
+        show_choices=True,
+    ),
 ) -> None:
     args = SimpleNamespace(
         generator_version=ctx.obj.generator_version,
@@ -2499,6 +2476,7 @@ def interactive(
         generator_args=generator_arg,
         swain_base_url=swain_base_url,
         crudsql_url=crudsql_url,
+        engine=engine.lower(),
     )
     try:
         rc = handle_interactive(args)

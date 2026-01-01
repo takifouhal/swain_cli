@@ -9,7 +9,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 - **Homebrew tap** — bump the version/URLs/checksums in `Formula/swain_cli.rb` so `brew upgrade` can pick up the release.
 
 ## End-to-end checklist
-1. Confirm `main` has every change you intend to ship and that `plan.md` (or your changelog source) is current.
+1. Confirm `main` has every change you intend to ship and that `CHANGELOG.md` (or your release notes source) is current.
 2. Run the full test suite locally: `python -m pytest`.
 3. Update the version in all required files and stage the changes.
 4. Regenerate JRE artefacts and hashes if the Temurin version or layout changed.
@@ -21,7 +21,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 ### 1. Prepare the release
 - Review open PRs/issues and make sure nothing critical is missing.
 - Verify runtime dependencies in `pyproject.toml` match what the CLI actually imports.
-- Update release notes (`plan.md`, GitHub Releases draft, or your chosen location).
+- Update release notes (`CHANGELOG.md`, GitHub Releases draft, or your chosen location).
 - Run `python -m pytest` and fix failures before continuing.
 
 ### 2. Update embedded JRE assets (only when needed)
@@ -85,7 +85,7 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
    - Windows (PowerShell): `iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex`
    Or via Python: `pipx install swain_cli`.
    Then run `swain_cli doctor` and `swain_cli list-generators`.
-5. Update `plan.md` (or your release notes) with the final status.
+5. Update `CHANGELOG.md` (or your release notes) with the final status.
 
 ### 9. After the release
 - Announce the release (team channels, changelog, etc.).

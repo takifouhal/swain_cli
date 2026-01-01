@@ -74,6 +74,10 @@ pnpm-debug.log*
 # Generated SDK output
 sdks/
 
+# Bundled artifacts (downloaded at runtime)
+swain_cli/vendor/
+swain_cli/assets/
+
 # Local build artifacts for JRE
 tmp-jdk-*.tar.gz
 swaggen-jre-*.tar.gz

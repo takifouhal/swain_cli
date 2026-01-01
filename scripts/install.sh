@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.sh | bash
 # Optional:
-#   INSTALL_DIR=/usr/local/bin VERSION=v0.3.6 bash install.sh
+#   INSTALL_DIR=/usr/local/bin VERSION=v0.3.10 bash install.sh
 
 REPO="takifouhal/swain_cli"
 INSTALL_DIR_DEFAULT="/usr/local/bin"
@@ -60,13 +60,7 @@ if ! curl -fL "${download_url}" -o "${tmpfile}"; then
     # Fallback to the latest release redirect endpoint
     download_url="https://github.com/${REPO}/releases/latest/download/${asset_name}"
     echo "Retrying with latest release asset..."
-    if ! curl -fL "${download_url}" -o "${tmpfile}"; then
-      # Fallback to legacy generic names used by earlier releases
-      legacy_name="swain_cli"
-      echo "Falling back to legacy asset name: ${legacy_name}"
-      legacy_url="https://github.com/${REPO}/releases/latest/download/${legacy_name}"
-      curl -fL "${legacy_url}" -o "${tmpfile}"
-    fi
+    curl -fL "${download_url}" -o "${tmpfile}"
   else
     echo "Failed to download ${download_url}" >&2
     exit 1

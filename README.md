@@ -1,11 +1,11 @@
 # swain_cli
 
-`swain_cli` is a zero-setup CLI around OpenAPI Generator. It vendors the generator JAR, downloads a trimmed Temurin JRE on demand, and caches everything per user so you can build SDKs consistently without installing Java yourself.
+`swain_cli` is a zero-setup CLI around OpenAPI Generator. It downloads a pinned OpenAPI Generator JAR plus a trimmed Temurin JRE on demand and caches everything per user so you can build SDKs consistently without installing Java yourself.
 
 ## Highlights
 - Generate SDKs for multiple languages with a single command or an interactive wizard
 - Ship exactly what you test with OpenAPI Generator `7.6.0` pinned inside the toolchain
-- Launch the bundled OpenJDK 21 runtime automatically (or opt into your own `java`)
+- Launch the embedded OpenJDK 21 runtime automatically (or opt into your own `java`)
 - Keep dependencies light (Typer, httpx, questionary, platformdirs, keyring, pooch) so `pipx`, CI, and ephemeral environments stay happy
 - Inspect and manage the embedded engine with helper commands (`engine`, `doctor`, `list-generators`)
 
@@ -21,7 +21,7 @@
   iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
   ```
 
-The single-file binary bundles a Python runtime, so no system Python is needed. On first run, `swain_cli` downloads a trimmed Temurin JRE for your platform and caches it.
+The single-file binary bundles a Python runtime, so no system Python is needed. On first run, `swain_cli` downloads a trimmed Temurin JRE plus the pinned OpenAPI Generator JAR and caches them.
 
 Notes:
 - Linux arm64 is supported (built via emulated runner).
@@ -52,7 +52,7 @@ swain_cli engine install-jre
 # Explore generators and craft a command via guided prompts
 swain_cli interactive
 
-# List all bundled generators (delegates to the pinned OpenAPI Generator)
+# List all generators (delegates to the pinned OpenAPI Generator)
 swain_cli list-generators
 
 # Generate Python and TypeScript clients into ./sdks/<generator>
@@ -73,7 +73,7 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 
 ## Command reference
 - `swain_cli interactive` — ask a short set of questions, preview the matching `swain_cli gen` command, and optionally run it on the spot. Seed the wizard with `--java-opt` and pass raw OpenAPI Generator flags via `--generator-arg` so interactive runs match your scripts.
-- `swain_cli list-generators` — enumerate all generators shipped in the embedded JAR. Add `--engine system` to validate a local Java installation instead.
+- `swain_cli list-generators` — enumerate all generators provided by the pinned OpenAPI Generator JAR. Add `--engine system` to validate a local Java installation instead.
 - `swain_cli doctor` — print environment information, cache paths, installed JREs, and JAR availability to help diagnose setup issues.
 - `swain_cli auth` — manage credentials for hosted Swain services (`login`, `logout`, `status`). Tokens live in the system keyring; use `SWAIN_CLI_AUTH_TOKEN` for ephemeral automation.
 - `swain_cli engine <action>` — switch between the embedded runtime and your system Java, install the JRE ahead of time, or update the pinned JAR.
@@ -90,9 +90,9 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 - The interactive wizard checks for a token before listing projects and will prompt you to add or replace one if missing.
 
 ## Engine modes and caching
-- **Embedded engine (default)** — the first run downloads a platform-specific Temurin JRE and caches it alongside the vendor JAR under `~/.cache/swain_cli` (Linux), `~/Library/Caches/swain_cli` (macOS), or `%LOCALAPPDATA%\swain_cli\cache` (Windows). Override with `SWAIN_CLI_CACHE_DIR`.
+- **Embedded engine (default)** — the first run downloads a platform-specific Temurin JRE and caches it alongside the pinned OpenAPI Generator JAR under `~/.cache/swain_cli` (Linux), `~/Library/Caches/swain_cli` (macOS), or `%LOCALAPPDATA%\swain_cli\cache` (Windows). Override with `SWAIN_CLI_CACHE_DIR`.
 - **System engine** — add `--engine system` (or export `SWAIN_CLI_ENGINE=system`) to run with whatever `java` is already on `PATH`.
-- **Offline use** — prime the cache via `swain_cli engine install-jre` or copy an existing cache directory between machines.
+- **Offline use** — prime the cache via `swain_cli engine install-jre` and `swain_cli engine update-jar --version 7.6.0` (or run `swain_cli list-generators` once) or copy an existing cache directory between machines.
 
 ## Running in CI
 1. Install the package (`pipx install swain_cli` or `pip install swain_cli`).
