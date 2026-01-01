@@ -23,6 +23,24 @@ def test_cli_without_command_shows_help():
     assert "Commands" in result.stdout
 
 
+def test_main_returns_interrupt_code_on_keyboard_interrupt(monkeypatch):
+    class FakeCommand:
+        def main(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.typer.main, "get_command", lambda _app: FakeCommand())
+    assert cli.main(["--help"]) == constants.EXIT_CODE_INTERRUPT
+
+
+def test_main_returns_interrupt_code_on_abort(monkeypatch):
+    class FakeCommand:
+        def main(self, *args, **kwargs):
+            raise cli.typer.Abort()
+
+    monkeypatch.setattr(cli.typer.main, "get_command", lambda _app: FakeCommand())
+    assert cli.main(["--help"]) == constants.EXIT_CODE_INTERRUPT
+
+
 def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
     captured: Dict[str, Any] = {}
 
@@ -241,4 +259,3 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.crudsql_url is None
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]
     assert dynamic_bases == ["https://api.example.com/crud"]
-

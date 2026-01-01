@@ -28,6 +28,28 @@ jobs:
         run: python -m mypy swain_cli
         shell: bash
 
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build
+        shell: bash
+      - name: Smoke install wheel
+        run: |
+          python -m pip install dist/*.whl
+          swain_cli --help
+          python -m swain_cli --help
+        shell: bash
+
   tests:
     name: pytest (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

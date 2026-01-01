@@ -6,10 +6,13 @@ This document is a lightweight checklist for keeping `swain_cli` easy to change 
 - `python -m pytest` is green.
 - `python -m mypy swain_cli` is green.
 - `ruff check .` is green.
+- `python -m build` is green (sanity-check packaging; install with `python -m pip install build`).
 
 ## One-command checks
-- macOS/Linux: `./scripts/check.sh`
+- macOS/Linux: `./scripts/check.sh` (set `PYTHON=python3` when you need a specific interpreter)
 - Windows: `powershell -File scripts/check.ps1`
+
+Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 
 ## Non-goals (for refactors)
 - No CLI behavior changes unless explicitly called out.

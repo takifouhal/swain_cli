@@ -303,8 +303,8 @@ def read_login_token(args: SimpleNamespace) -> str:
         or login_payload.get("refreshToken")
         or login_payload.get("refresh-token")
     )
-    setattr(args, "login_response", login_payload)
-    setattr(args, "login_refresh_token", refresh_value)
+    args.login_response = login_payload
+    args.login_refresh_token = refresh_value
     return token_value
 
 
@@ -322,7 +322,7 @@ def interactive_auth_setup(auth_base_url: Optional[str] = None) -> None:
         raise CLIError("authentication token required; run 'swain_cli auth login'")
     args = SimpleNamespace(username=None, password=None, auth_base_url=auth_base_url)
     token = read_login_token(args)
-    persist_auth_token(token, getattr(args, "login_refresh_token", None))
+    persist_auth_token(token, args.login_refresh_token)
 
 
 def obtain_token_from_user(*, allow_reuse: bool) -> str:
@@ -341,7 +341,7 @@ def obtain_token_from_user(*, allow_reuse: bool) -> str:
 
 def handle_auth_login(args: SimpleNamespace) -> int:
     token = read_login_token(args)
-    refresh = getattr(args, "login_refresh_token", None)
+    refresh = args.login_refresh_token
     persist_auth_token(token, refresh)
     if refresh:
         log("refresh token stored in keyring")

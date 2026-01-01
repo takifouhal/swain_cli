@@ -69,7 +69,7 @@ def test_read_login_token_with_credentials(monkeypatch):
     )
     token = auth.read_login_token(args)
     assert token == "abc"
-    assert getattr(args, "login_refresh_token") == "refresh"
+    assert args.login_refresh_token == "refresh"
 
 
 def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
@@ -87,7 +87,7 @@ def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
     )
     token = auth.read_login_token(args)
     assert token == "xyz"
-    assert getattr(args, "login_refresh_token") is None
+    assert args.login_refresh_token is None
 
 
 def test_handle_auth_login_with_credentials(monkeypatch):
@@ -116,7 +116,7 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
 
     def fake_read_login_token(ns):
         captured_args["auth_base_url"] = ns.auth_base_url
-        setattr(ns, "login_refresh_token", "refresh-token")
+        ns.login_refresh_token = "refresh-token"
         return "credential-token"
 
     monkeypatch.setattr(auth, "read_login_token", fake_read_login_token)
@@ -152,4 +152,3 @@ def test_auth_status_prefers_env(monkeypatch, capfd):
     assert "env-token-value" not in out
     assert "effective token" in out
     assert err == ""
-

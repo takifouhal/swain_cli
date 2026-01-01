@@ -25,6 +25,7 @@ from .constants import (
     DEFAULT_CRUDSQL_API_BASE_URL,
     DEFAULT_SWAIN_BASE_URL,
     ENGINE_ENV_VAR,
+    EXIT_CODE_INTERRUPT,
     EXIT_CODE_USAGE,
     TENANT_ID_ENV_VAR,
 )
@@ -378,6 +379,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             prog_name="swain_cli",
             standalone_mode=False,
         )
+    except (KeyboardInterrupt, typer.Abort):
+        log_error("interrupted")
+        return EXIT_CODE_INTERRUPT
     except SystemExit as exc:
         return int(exc.code or 0)
     return 0
