@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -12,9 +11,9 @@ import httpx
 
 from .console import log
 from .errors import CLIError
-from .http import describe_http_error, http_timeout, request_headers
+from .http import caused_by_status, describe_http_error, http_timeout, request_headers
 from .urls import swain_url
-from .utils import as_dict, pick, safe_int, safe_str
+from .utils import as_dict, pick, safe_int, safe_str, write_bytes_to_tempfile
 
 
 @dataclass(frozen=True)
@@ -128,8 +127,7 @@ def fetch_swain_projects_with_fallback(
     except CLIError as exc:
         if not fallback_base or fallback_base == primary_base:
             raise
-        message = str(exc)
-        if "404" not in message and "Not Found" not in message:
+        if not caused_by_status(exc, 404):
             raise
     return fetch_swain_projects(
         fallback_base,
@@ -282,8 +280,7 @@ def fetch_swain_connections_with_fallback(
     except CLIError as exc:
         if not fallback_base or fallback_base == primary_base:
             raise
-        message = str(exc)
-        if "404" not in message and "Not Found" not in message:
+        if not caused_by_status(exc, 404):
             raise
     return fetch_swain_connections(
         fallback_base,
@@ -356,11 +353,8 @@ def fetch_swain_connection_schema(
             ) from exc
     if not response.content or not response.content.strip():
         raise CLIError("connection dynamic swagger response was empty")
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".json") as handle:
-            handle.write(response.content)
-            return Path(handle.name)
-    except OSError as exc:
-        raise CLIError(
-            f"failed to persist connection swagger for {connection.id}: {exc}"
-        ) from exc
+    return write_bytes_to_tempfile(
+        response.content,
+        suffix=".json",
+        description=f"connection swagger for {connection.id}",
+    )

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
+
+from .errors import CLIError
 
 
 def is_url(path: str) -> bool:
@@ -25,6 +28,24 @@ def guess_default_schema() -> Optional[Path]:
 
 def format_cli_command(argv: Sequence[str]) -> str:
     return shlex.join(str(part) for part in argv)
+
+
+def write_bytes_to_tempfile(
+    data: bytes,
+    *,
+    suffix: str = "",
+    description: str = "temporary file",
+) -> Path:
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            suffix=suffix,
+        ) as handle:
+            handle.write(data)
+            return Path(handle.name)
+    except OSError as exc:
+        raise CLIError(f"failed to persist {description}: {exc}") from exc
 
 
 def safe_int(value: Any) -> Optional[int]:

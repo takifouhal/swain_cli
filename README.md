@@ -85,6 +85,7 @@ Run `swain_cli --help` or `swain_cli <command> --help` for full usage.
 Use the `auth` subcommands to prepare credentials before generating SDKs against hosted Swain projects.
 
 - `swain_cli auth login` — authenticate via username/password (`POST /auth/login`). Access and refresh tokens are stored in the system keyring.
+- Refresh tokens are stored for future use; the CLI does not currently auto-refresh expired access tokens.
 - For ephemeral automation, set `SWAIN_CLI_AUTH_TOKEN` (takes precedence over the keyring).
 - `swain_cli auth status` — inspect the active token source and storage location.
 - `swain_cli auth logout` — clear the stored token.

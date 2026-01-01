@@ -29,3 +29,10 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - `swain_cli/crudsql.py`: CrudSQL schema discovery + downloads over HTTP.
 - `swain_cli/urls.py`: URL normalization + endpoint building.
 - `swain_cli/http.py`: shared HTTP helpers (headers, error formatting).
+
+## Target state (convergence checklist)
+- Keep business logic testable: extract pure helpers and prefer dependency injection at module boundaries.
+- Prefer status-code checks over string matching for HTTP fallbacks (e.g., 404 proxy vs platform routes).
+- Centralize shared IO patterns (e.g., writing downloaded schemas to temp files) to keep error handling consistent.
+- Bound memory use when streaming subprocess output; the CLI should print full output but only retain a small tail for retries.
+- Keep docs in sync with code: update this file when module boundaries or invariants change.

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -509,19 +510,34 @@ def run_openapi_generator(
         text=True,
         bufsize=1,
     )
-    combined_output: List[str] = []
+    max_capture_chars = 200_000
+    captured: deque[str] = deque()
+    captured_size = 0
+
+    def capture(line: str) -> None:
+        nonlocal captured_size
+        if len(line) > max_capture_chars:
+            captured.clear()
+            line = line[-max_capture_chars:]
+            captured_size = 0
+        captured.append(line)
+        captured_size += len(line)
+        while captured and captured_size > max_capture_chars:
+            removed = captured.popleft()
+            captured_size -= len(removed)
+
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
             sys.stdout.write(line)
-            combined_output.append(line)
+            capture(line)
         proc.stdout.close()
         proc.wait()
     except KeyboardInterrupt:
         proc.terminate()
         proc.wait()
         raise
-    return proc.returncode, "".join(combined_output)
+    return proc.returncode, "".join(captured)
 
 
 def handle_list_generators(args: SimpleNamespace) -> int:

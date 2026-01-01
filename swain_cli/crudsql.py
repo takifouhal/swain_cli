@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
@@ -13,6 +12,7 @@ from .console import log
 from .errors import CLIError
 from .http import describe_http_error, http_timeout, request_headers
 from .urls import crudsql_dynamic_swagger_url
+from .utils import write_bytes_to_tempfile
 
 
 def crudsql_discover_schema_url(
@@ -71,9 +71,8 @@ def fetch_crudsql_schema(
     if not response.content or not response.content.strip():
         raise CLIError("CrudSQL dynamic swagger response was empty")
 
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".json") as handle:
-            handle.write(response.content)
-            return Path(handle.name)
-    except OSError as exc:
-        raise CLIError(f"failed to persist CrudSQL schema locally: {exc}") from exc
+    return write_bytes_to_tempfile(
+        response.content,
+        suffix=".json",
+        description="CrudSQL schema locally",
+    )

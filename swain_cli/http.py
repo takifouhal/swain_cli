@@ -71,3 +71,13 @@ def describe_http_error(exc: httpx.HTTPError) -> str:
     detail = str(exc).strip()
     return detail or str(exc)
 
+
+def caused_by_status(exc: BaseException, status_code: int) -> bool:
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            return current.response.status_code == status_code
+        current = current.__cause__ or current.__context__
+    return False
