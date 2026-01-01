@@ -24,6 +24,7 @@ from platformdirs import PlatformDirs
 from .console import log, log_error
 from .constants import (
     ASSET_BASE,
+    ASSET_BASE_ENV_VAR,
     CACHE_ENV_VAR,
     DEFAULT_CACHE_DIR_NAME,
     DEFAULT_JAVA_OPTS,
@@ -97,6 +98,10 @@ class HTTPXDownloader:
 
 
 HTTPX_DOWNLOADER = HTTPXDownloader(timeout=HTTP_TIMEOUT_SECONDS)
+
+
+def asset_base_url() -> str:
+    return (os.environ.get(ASSET_BASE_ENV_VAR) or ASSET_BASE).rstrip("/")
 
 
 @lru_cache()
@@ -200,10 +205,11 @@ def resolve_asset_sha256(asset: JREAsset) -> str:
     if asset.sha256:
         return asset.sha256
     filename = checksum_filename(asset)
+    base = asset_base_url()
     downloads = downloads_dir()
     checksum_path = Path(
         pooch.retrieve(
-            url=f"{ASSET_BASE}/{filename}",
+            url=f"{base}/{filename}",
             path=downloads,
             fname=filename,
             known_hash=None,
@@ -246,10 +252,11 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
             return target
 
     known_hash = f"sha256:{sha256}" if sha256 else None
+    base = asset_base_url()
     try:
         return Path(
             pooch.retrieve(
-                url=f"{ASSET_BASE}/{asset_name}",
+                url=f"{base}/{asset_name}",
                 path=downloads,
                 fname=asset_name,
                 known_hash=known_hash,

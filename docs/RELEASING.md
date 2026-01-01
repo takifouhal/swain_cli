@@ -27,7 +27,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 ### 2. Update embedded JRE assets (only when needed)
 1. Launch the `build-jre` workflow from the GitHub Actions UI.
 2. Supply the desired Temurin version and optional `release_tag` (typically `jre-<version>`). The workflow runs the scripts in `scripts/` to produce trimmed archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows.
-3. When the workflow finishes, download the `.sha256` files from the run and paste the sums into `swain_cli/constants.py` (the `JRE_ASSETS` mapping).
+3. When the workflow finishes, download `combined-checksums.txt` (or the individual `.sha256` files) and run `python scripts/sync-jre-checksums.py combined-checksums.txt --write` to update `swain_cli/constants.py` (the `JRE_ASSETS` mapping).
 4. Upload the new archives and checksum files to the release specified by `release_tag` (or manually to the appropriate release if you omitted it).
 
 ### 3. Finalise version bumps

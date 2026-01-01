@@ -1,10 +1,10 @@
 import os
-from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
 import swain_cli.constants as constants
 import swain_cli.generator as generator
 import swain_cli.swain_api as swain_api
+from swain_cli.args import GenArgs
 
 
 def test_typescript_alias():
@@ -12,12 +12,14 @@ def test_typescript_alias():
 
 
 def test_build_generate_command_alias(tmp_path):
-    args = SimpleNamespace(
+    args = GenArgs(
+        out=str(tmp_path),
+        languages=["typescript"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
-        property=[],
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
     )
@@ -61,23 +63,25 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
     monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
         crudsql_url="https://api.example.com",
+        swain_base_url=None,
         swain_project_id=None,
         swain_connection_id=None,
         out=str(tmp_path / "out"),
         languages=["python"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
-        property=[],
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
         swain_tenant_id=None,
+        java_opts=[],
     )
 
     assert generator.handle_gen(args) == 0
@@ -113,7 +117,7 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
         lambda jar, engine, cmd, java_opts: (0, ""),
     )
 
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
@@ -125,12 +129,13 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
         languages=["python"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
+        additional_properties=[],
+        generator_arg=[],
         swain_tenant_id=None,
-        property=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
+        java_opts=[],
     )
 
     assert generator.handle_gen(args) == 0
@@ -161,23 +166,25 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     )
 
     out_dir = tmp_path / "out"
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
         crudsql_url=None,
+        swain_base_url=None,
         swain_project_id=None,
         swain_connection_id=None,
         out=str(out_dir),
         languages=["python"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
+        additional_properties=[],
+        generator_arg=[],
         swain_tenant_id=None,
-        property=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
+        java_opts=[],
     )
 
     assert generator.handle_gen(args) == 0
@@ -227,11 +234,12 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
     monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
         crudsql_url="https://api.example.com",
+        swain_base_url="https://api.example.com",
         swain_project_id=None,
         swain_connection_id=connection.id,
         swain_tenant_id=None,
@@ -239,11 +247,12 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         languages=["python"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
-        property=[],
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
+        java_opts=[],
     )
 
     assert generator.handle_gen(args) == 0
@@ -281,23 +290,25 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
 
     monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
         crudsql_url="https://api.example.com",
+        swain_base_url=None,
         swain_project_id=None,
         swain_connection_id=None,
         out=str(tmp_path / "out"),
         languages=["python"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
-        property=[],
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
         swain_tenant_id=None,
+        java_opts=[],
     )
 
     assert generator.handle_gen(args) == 0
@@ -327,20 +338,21 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
 
     monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
-    args = SimpleNamespace(
+    args = GenArgs(
         generator_version=None,
         engine="embedded",
         schema=None,
         crudsql_url="https://api.example.com",
+        swain_base_url=None,
         swain_project_id=None,
         swain_connection_id=None,
         out=str(tmp_path / "out"),
         languages=["go"],
         config=None,
         templates=None,
-        additional_properties=None,
-        generator_arg=None,
-        property=[],
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
         skip_validate_spec=False,
         verbose=False,
         swain_tenant_id=None,
@@ -352,4 +364,3 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
     first_cmd, second_cmd = calls
     assert any("apiDocs=false" in part for part in first_cmd)
     assert any("apiDocs=false" in part for part in second_cmd)
-

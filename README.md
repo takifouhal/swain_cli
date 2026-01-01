@@ -91,6 +91,7 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 
 ## Engine modes and caching
 - **Embedded engine (default)** — the first run downloads a platform-specific Temurin JRE and caches it alongside the pinned OpenAPI Generator JAR under `~/.cache/swain_cli` (Linux), `~/Library/Caches/swain_cli` (macOS), or `%LOCALAPPDATA%\swain_cli\cache` (Windows). Override with `SWAIN_CLI_CACHE_DIR`.
+- **Custom asset base (advanced)** — set `SWAIN_CLI_ASSET_BASE` to override where embedded JRE archives are downloaded from.
 - **System engine** — add `--engine system` (or export `SWAIN_CLI_ENGINE=system`) to run with whatever `java` is already on `PATH`.
 - **Offline use** — prime the cache via `swain_cli engine install-jre` and `swain_cli engine update-jar --version 7.6.0` (or run `swain_cli list-generators` once) or copy an existing cache directory between machines.
 
@@ -114,7 +115,7 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 
 ## Maintainers
 - Trigger the `build-jre` workflow (workflow dispatch) to build trimmed JRE archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows. Provide an optional `release_tag` to publish directly to a `jre-<version>` release.
-- Copy the resulting `.sha256` values into `swain_cli/constants.py` (the `JRE_ASSETS` mapping) and update `ASSET_BASE` if you move assets to a new release tag.
+- Use `python scripts/sync-jre-checksums.py combined-checksums.txt --write` to update `swain_cli/constants.py` (the `JRE_ASSETS` mapping) and update `ASSET_BASE` (or set `SWAIN_CLI_ASSET_BASE`) if you move assets to a new release tag.
 - Tag releases (`git tag vX.Y.Z`) once assets are ready. The full release runbook lives in `docs/RELEASING.md`.
 
 ## Third-party notices

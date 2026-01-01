@@ -16,7 +16,9 @@ This document is a lightweight checklist for keeping `swain_cli` easy to change 
 - No network calls in unit tests (patch `httpx.Client`).
 
 ## Module boundaries (high level)
-- `swain_cli/cli.py`: Typer commands + interactive UX (no HTTP details).
+- `swain_cli/cli.py`: Typer commands + wiring (no prompt/HTTP details).
+- `swain_cli/interactive.py`: interactive wizard UX (no HTTP details).
+- `swain_cli/args.py`: typed argument models shared across modules.
 - `swain_cli/generator.py`: orchestrates schema resolution + OpenAPI Generator invocation.
 - `swain_cli/engine.py`: embedded JRE/JAR management + subprocess execution.
 - `swain_cli/auth.py`: credential login + token storage (env/keyring) + tenant ID resolution.

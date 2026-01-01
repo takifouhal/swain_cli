@@ -2,4 +2,4 @@ include LICENSE
 include README.md
 include CHANGELOG.md
 recursive-include examples *.yaml *.json
-recursive-include scripts *.sh *.ps1
+recursive-include scripts *.sh *.ps1 *.py

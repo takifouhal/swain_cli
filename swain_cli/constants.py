@@ -10,6 +10,7 @@ PINNED_GENERATOR_SHA256 = "35074bdd3cdfc46be9a902e11a54a3faa3cae1e34eb66cbd959d1
 # JRE assets were renamed after v0.3.0; use v0.3.2 where
 # the filenames match entries in JRE_ASSETS.
 ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.3.2"
+ASSET_BASE_ENV_VAR = "SWAIN_CLI_ASSET_BASE"
 PACKAGE_NAME = "swain_cli"
 
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import List, Optional, Sequence, Tuple
 
+from .args import GenArgs
 from .auth import determine_swain_tenant_id, require_auth_token
 from .console import log, log_error
 from .constants import (
@@ -18,7 +19,6 @@ from .constants import (
 )
 from .crudsql import fetch_crudsql_schema
 from .engine import (
-    ResolvedJavaOptions,
     resolve_generator_jar,
     resolve_java_opts,
     run_openapi_generator,
@@ -99,7 +99,7 @@ def replace_heap_option(java_opts: Sequence[str], new_heap: str) -> List[str]:
 
 
 def build_generate_command(
-    schema: str, language: str, args: SimpleNamespace, out_dir: Path
+    schema: str, language: str, args: GenArgs, out_dir: Path
 ) -> Tuple[str, Path, List[str]]:
     resolved_lang = LANGUAGE_ALIASES.get(language, language)
     target_dir = out_dir / resolved_lang
@@ -121,7 +121,7 @@ def build_generate_command(
         cmd.extend(["-p", prop])
     for raw_arg in args.generator_arg or []:
         cmd.append(raw_arg)
-    for var in getattr(args, "property", []) or []:
+    for var in args.system_properties:
         cmd.extend(["-D", var])
     if args.skip_validate_spec:
         cmd.append("--skip-validate-spec")
@@ -130,15 +130,26 @@ def build_generate_command(
     return resolved_lang, target_dir, cmd
 
 
-def handle_gen(args: SimpleNamespace) -> int:
+def ensure_additional_property_defaults(properties: Sequence[str]) -> List[str]:
+    addl_props: List[str] = list(properties)
+    has_flag = any(
+        (prop.split("=", 1)[0].strip() == "disallowAdditionalPropertiesIfNotPresent")
+        for prop in addl_props
+    )
+    if not has_flag:
+        addl_props.append("disallowAdditionalPropertiesIfNotPresent=false")
+    return addl_props
+
+
+def handle_gen(args: GenArgs) -> int:
     jar = resolve_generator_jar(args.generator_version)
     engine = args.engine
-    schema_arg = getattr(args, "schema", None)
-    crudsql_url = getattr(args, "crudsql_url", None)
-    swain_base_url = getattr(args, "swain_base_url", None)
-    swain_project_id = getattr(args, "swain_project_id", None)
-    swain_connection_id = getattr(args, "swain_connection_id", None)
-    swain_tenant_id = getattr(args, "swain_tenant_id", None)
+    schema_arg = args.schema
+    crudsql_url = args.crudsql_url
+    swain_base_url = args.swain_base_url
+    swain_project_id = args.swain_project_id
+    swain_connection_id = args.swain_connection_id
+    swain_tenant_id = args.swain_tenant_id
     temp_schema: Optional[Path] = None
     selected_connection: Optional[SwainConnection] = None
     swain_base, crudsql_base = resolve_base_urls(swain_base_url, crudsql_url)
@@ -271,27 +282,21 @@ def handle_gen(args: SimpleNamespace) -> int:
         if not languages:
             raise CLIError("at least one --lang is required")
 
-        # Ensure generated models include additionalProperties by default.
-        # Many generators default to disallowing additionalProperties when not explicitly present in the spec.
-        # Align with OAS/JSON Schema by setting disallowAdditionalPropertiesIfNotPresent=false unless the user overrides it.
-        addl_props: List[str] = list(getattr(args, "additional_properties", None) or [])
-        has_flag = any(
-            (prop.split("=", 1)[0].strip() == "disallowAdditionalPropertiesIfNotPresent")
-            for prop in addl_props
+        resolved_args = replace(
+            args,
+            additional_properties=ensure_additional_property_defaults(
+                args.additional_properties
+            ),
+            generator_arg=ensure_generator_arg_defaults(args.generator_arg),
         )
-        if not has_flag:
-            addl_props.append("disallowAdditionalPropertiesIfNotPresent=false")
-        setattr(args, "additional_properties", addl_props)
 
-        raw_generator_args = getattr(args, "generator_arg", None) or []
-        generator_args = ensure_generator_arg_defaults(raw_generator_args)
-        setattr(args, "generator_arg", generator_args)
-
-        resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
+        resolved_java_opts = resolve_java_opts(args.java_opts)
         java_opts = list(resolved_java_opts.options)
         log(f"java options: {format_cli_command(java_opts)}")
         for lang in languages:
-            resolved_lang, target_dir, cmd = build_generate_command(schema, lang, args, out_dir)
+            resolved_lang, target_dir, cmd = build_generate_command(
+                schema, lang, resolved_args, out_dir
+            )
             log(f"generating {resolved_lang} into {target_dir}")
             current_cmd = list(cmd)
             current_java_opts = list(java_opts)
@@ -323,7 +328,6 @@ def handle_gen(args: SimpleNamespace) -> int:
                     log_error(f"generation failed for {resolved_lang} (exit code {rc})")
                     return rc if rc != 0 else EXIT_CODE_SUBPROCESS
             java_opts = current_java_opts
-            resolved_java_opts = ResolvedJavaOptions(java_opts, provided=True)
     finally:
         if temp_schema:
             temp_schema.unlink(missing_ok=True)
