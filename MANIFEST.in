@@ -1,7 +1,5 @@
 include LICENSE
 include README.md
 include CHANGELOG.md
-recursive-include examples *.yaml
+recursive-include examples *.yaml *.json
 recursive-include scripts *.sh *.ps1
-recursive-exclude swain_cli/vendor *
-recursive-exclude swain_cli/assets *

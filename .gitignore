@@ -69,19 +69,13 @@ pnpm-debug.log*
 # Logs
 *.log
 
-# Note: do NOT ignore JARs — we vendor one intentionally.
-
 # Generated SDK output
 sdks/
 
-# Bundled artifacts (downloaded at runtime)
-swain_cli/vendor/
-swain_cli/assets/
-
 # Local build artifacts for JRE
 tmp-jdk-*.tar.gz
-swaggen-jre-*.tar.gz
-swaggen-jre-*.zip
+swain_cli-jre-*.tar.gz
+swain_cli-jre-*.zip
 
 # Checksum artifacts
-swaggen-jre-*.sha256
+swain_cli-jre-*.sha256

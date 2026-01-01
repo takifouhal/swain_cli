@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.sh | bash
 # Optional:
-#   INSTALL_DIR=/usr/local/bin VERSION=v0.3.10 bash install.sh
+#   INSTALL_DIR=/usr/local/bin VERSION=vX.Y.Z bash install.sh
 
 REPO="takifouhal/swain_cli"
 INSTALL_DIR_DEFAULT="/usr/local/bin"

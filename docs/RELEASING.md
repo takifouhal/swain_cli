@@ -3,9 +3,9 @@
 This runbook walks through publishing a tagged release that ships refreshed JRE assets and updated PyPI distributions.
 
 ## Quick reference
-- **Version bumps** — update `pyproject.toml`, `swain_cli/__init__.py`, and any other user-facing version strings.
+- **Version bumps** — update `swain_cli/__init__.py` (packaging version is sourced from `__version__`) and any other user-facing version strings.
 - **Embedded assets** — refresh JRE checksums plus the `ASSET_BASE` constant in `swain_cli/cli.py` whenever download locations change.
-- **Automation** — `release.yml` builds JREs, publishes to PyPI via Trusted Publishing (OIDC), and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across Python 3.8–3.11 on every push/PR.
+- **Automation** — `release.yml` builds JREs, publishes to PyPI via Trusted Publishing (OIDC), and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across the supported Python versions on every push/PR.
 - **Homebrew tap** — bump the version/URLs/checksums in `Formula/swain_cli.rb` so `brew upgrade` can pick up the release.
 
 ## End-to-end checklist
@@ -31,7 +31,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 4. Upload the new archives and checksum files to the release specified by `release_tag` (or manually to the appropriate release if you omitted it).
 
 ### 3. Finalise version bumps
-- Ensure every version bump is committed (for example in `pyproject.toml`, `swain_cli/__init__.py`, CLI help text, and documentation).
+- Ensure every version bump is committed (for example in `swain_cli/__init__.py`, CLI help text, and documentation).
 - Update `Formula/swain_cli.rb` with the new version plus the per-platform download URLs + SHA-256 values once the PyInstaller binaries are uploaded.
 - Stage the updated checksums and `ASSET_BASE` if assets moved.
 - Commit with a message like `Release vX.Y.Z`.

@@ -82,6 +82,94 @@ def test_get_jre_asset_unsupported(monkeypatch):
     cli.get_platform_info.cache_clear()
 
 
+def test_ensure_embedded_jre_reuses_cached_install(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "jre"
+    (runtime_dir / "bin").mkdir(parents=True)
+    (runtime_dir / "bin" / "java").write_text("", encoding="utf-8")
+    expected_sha = "cached-sha"
+    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
+
+    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("unexpected download while cached JRE is valid")
+
+    monkeypatch.setattr(cli, "fetch_asset_file", fail_fetch)
+
+    assert cli.ensure_embedded_jre(force=False) == runtime_dir
+    assert (runtime_dir / "bin" / "java").exists()
+
+
+def test_ensure_embedded_jre_reinstalls_on_marker_mismatch(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "jre"
+    (runtime_dir / "bin").mkdir(parents=True)
+    (runtime_dir / "bin" / "java").write_text("old", encoding="utf-8")
+    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text("old-sha", encoding="utf-8")
+    expected_sha = "new-sha"
+
+    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+
+    calls = {"fetches": 0}
+
+    def fake_fetch(asset_name, sha256, *, force=False):
+        calls["fetches"] += 1
+        assert asset_name == "dummy.tar.gz"
+        assert sha256 == expected_sha
+        assert force is False
+        return tmp_path / "archive.tar.gz"
+
+    def fake_extract(archive, dest):
+        (dest / "bin").mkdir(parents=True, exist_ok=True)
+        (dest / "bin" / "java").write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(cli, "extract_archive", fake_extract)
+    monkeypatch.setattr(cli, "normalize_runtime_dir", lambda *_: None)
+
+    assert cli.ensure_embedded_jre(force=False) == runtime_dir
+    assert calls["fetches"] == 1
+    assert (runtime_dir / cli.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
+    assert (runtime_dir / "bin" / "java").read_text(encoding="utf-8") == "new"
+
+
+def test_ensure_embedded_jre_force_reinstalls(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "jre"
+    (runtime_dir / "bin").mkdir(parents=True)
+    (runtime_dir / "bin" / "java").write_text("old", encoding="utf-8")
+    expected_sha = "force-sha"
+    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
+
+    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+
+    observed = {"force": None}
+
+    def fake_fetch(asset_name, sha256, *, force=False):
+        observed["force"] = force
+        return tmp_path / "archive.tar.gz"
+
+    def fake_extract(archive, dest):
+        (dest / "bin").mkdir(parents=True, exist_ok=True)
+        (dest / "bin" / "java").write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(cli, "extract_archive", fake_extract)
+    monkeypatch.setattr(cli, "normalize_runtime_dir", lambda *_: None)
+
+    assert cli.ensure_embedded_jre(force=True) == runtime_dir
+    assert observed["force"] is True
+    assert (runtime_dir / cli.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
+    assert (runtime_dir / "bin" / "java").read_text(encoding="utf-8") == "new"
+
+
 def test_cli_help_invocation():
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0
@@ -249,7 +337,7 @@ def test_determine_swain_tenant_id_env(monkeypatch):
     token = make_jwt({"tenant_ids": [1, 2, 3]})
     monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "600")
     result = cli.determine_swain_tenant_id(
-        cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+        cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
     )
     assert result == "600"
 
@@ -258,7 +346,7 @@ def test_determine_swain_tenant_id_single_claim(monkeypatch):
     token = make_jwt({"tenant_ids": [987]})
     monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
     result = cli.determine_swain_tenant_id(
-        cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+        cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
     )
     assert result == "987"
 
@@ -268,7 +356,7 @@ def test_determine_swain_tenant_id_multiple_claims_requires_choice(monkeypatch):
     monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
     with pytest.raises(cli.CLIError):
         cli.determine_swain_tenant_id(
-            cli.DEFAULT_CRUDSQL_BASE_URL, token, None, allow_prompt=False
+            cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
         )
 
 

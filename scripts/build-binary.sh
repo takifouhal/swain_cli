@@ -21,6 +21,6 @@ PY
   python -m pip install .
 fi
 
-pyinstaller -n swain_cli --onefile swain_cli/cli.py
+pyinstaller -n swain_cli --onefile -m swain_cli.cli
 
 echo "Built binary at dist/swain_cli$( [[ $(uname -s | tr '[:upper:]' '[:lower:]') =~ msys|mingw|cygwin ]] && echo '.exe' )"

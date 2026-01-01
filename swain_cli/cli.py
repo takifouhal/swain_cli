@@ -6,12 +6,12 @@ from __future__ import annotations
 import base64
 import re
 import hashlib
+from importlib.metadata import PackageNotFoundError, version as metadata_version
 import json
 import os
 import platform
 import shlex
 import shutil
-import string
 import subprocess
 import sys
 import tempfile
@@ -32,30 +32,27 @@ from platformdirs import PlatformDirs
 
 PINNED_GENERATOR_VERSION = "7.6.0"
 PINNED_GENERATOR_SHA256 = "35074bdd3cdfc46be9a902e11a54a3faa3cae1e34eb66cbd959d1c8070bbd7d7"
-JRE_VERSION = "21.0.4"
 # JRE assets were renamed after v0.3.0; use v0.3.2 where
 # the filenames match entries in JRE_ASSETS.
 ASSET_BASE = "https://github.com/takifouhal/swain_cli/releases/download/v0.3.2"
+PACKAGE_NAME = "swain_cli"
 CACHE_ENV_VAR = "SWAIN_CLI_CACHE_DIR"
 DEFAULT_CACHE_DIR_NAME = "swain_cli"
 AUTH_TOKEN_ENV_VAR = "SWAIN_CLI_AUTH_TOKEN"
 ENGINE_ENV_VAR = "SWAIN_CLI_ENGINE"
+GENERATOR_VERSION_ENV_VAR = "SWAIN_CLI_GENERATOR_VERSION"
 TENANT_ID_ENV_VAR = "SWAIN_CLI_TENANT_ID"
 TENANT_HEADER_NAME = "X-Tenant-ID"
 KEYRING_SERVICE = "swain_cli"
 KEYRING_USERNAME = "access_token"
 KEYRING_REFRESH_USERNAME = "refresh_token"
 JAVA_OPTS_ENV_VAR = "SWAIN_CLI_JAVA_OPTS"
-DEFAULT_JAVA_HEAP_OPTION = "-Xmx2g"
 DEFAULT_JAVA_OPTS = ["-Xms2g", "-Xmx10g", "-XX:+UseG1GC"]
 FALLBACK_JAVA_HEAP_OPTION = "-Xmx14g"
 OOM_MARKERS = ("OutOfMemoryError", "GC overhead limit exceeded")
 GLOBAL_PROPERTY_DISABLE_DOCS = "apiDocs=false,apiTests=false,modelDocs=false,modelTests=false"
 SKIP_OPERATION_EXAMPLE_FLAG = "--skip-operation-example"
 DEFAULT_SWAIN_BASE_URL = "https://api.swain.technology"
-# Alias retained for compatibility; historically the CLI used this value for the
-# Swain platform base URL.
-DEFAULT_CRUDSQL_BASE_URL = DEFAULT_SWAIN_BASE_URL
 DEFAULT_CRUDSQL_API_BASE_URL = f"{DEFAULT_SWAIN_BASE_URL.rstrip('/')}/crud"
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
@@ -72,6 +69,22 @@ COMMON_LANGUAGES = [
     "swift",
 ]
 HTTP_TIMEOUT_SECONDS = 30.0
+JRE_MARKER_FILENAME = ".swain_cli_jre_asset_sha256"
+
+
+@lru_cache()
+def cli_version() -> str:
+    try:
+        return metadata_version(PACKAGE_NAME)
+    except PackageNotFoundError:
+        try:
+            from . import __version__
+        except Exception:
+            return "0.0.0"
+        return __version__
+
+
+USER_AGENT = f"{PACKAGE_NAME}/{cli_version()} (openapi-generator/{PINNED_GENERATOR_VERSION})"
 
 app = typer.Typer(help="swain_cli CLI")
 auth_app = typer.Typer(help="Authentication helpers")
@@ -413,7 +426,7 @@ def crudsql_discover_schema_url(
     discovery_url = httpx.URL(normalized_base).join("api/schema-location")
     headers = {
         "Accept": "application/json",
-        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+        "User-Agent": USER_AGENT,
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -456,7 +469,7 @@ def fetch_crudsql_schema(
     log(f"fetching CrudSQL schema from {schema_url}")
     headers = {
         "Accept": "application/json",
-        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+        "User-Agent": USER_AGENT,
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -677,7 +690,7 @@ def _swain_request_headers(
 ) -> Dict[str, str]:
     headers = {
         "Accept": "application/json",
-        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+        "User-Agent": USER_AGENT,
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -730,7 +743,7 @@ def swain_login_with_credentials(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": f"swain_cli/{PINNED_GENERATOR_VERSION}",
+        "User-Agent": USER_AGENT,
     }
     payload = {"username": username, "password": password}
     timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
@@ -1227,14 +1240,40 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
         ) from exc
 
 
+def read_jre_marker(runtime_dir: Path) -> Optional[str]:
+    marker = runtime_dir / JRE_MARKER_FILENAME
+    try:
+        value = marker.read_text().strip()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    return value or None
+
+
+def write_jre_marker(runtime_dir: Path, sha256: str) -> None:
+    marker = runtime_dir / JRE_MARKER_FILENAME
+    try:
+        marker.write_text(sha256.strip() + "\n")
+    except OSError as exc:
+        raise CLIError(
+            f"failed to write embedded JRE marker file {marker}: {exc}"
+        ) from exc
+
+
 def ensure_embedded_jre(force: bool = False) -> Path:
     asset = get_jre_asset()
     expected_sha = resolve_asset_sha256(asset)
-    archive_path = fetch_asset_file(asset.filename, expected_sha, force=force)
     target_dir = jre_install_dir()
 
-    if force and target_dir.exists():
-        shutil.rmtree(target_dir)
+    if not force:
+        java_exec = find_embedded_java(target_dir)
+        marker_value = read_jre_marker(target_dir)
+        if java_exec and marker_value == expected_sha:
+            return target_dir
+
+    archive_path = fetch_asset_file(asset.filename, expected_sha, force=force)
+
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1246,6 +1285,7 @@ def ensure_embedded_jre(force: bool = False) -> Path:
         raise CLIError(
             "embedded JRE installation did not produce a usable java executable"
         )
+    write_jre_marker(target_dir, expected_sha)
     return target_dir
 
 
@@ -1343,7 +1383,7 @@ def emit_engine_snapshot(
 
 
 def resolve_generator_jar(version: Optional[str], *, allow_download: bool = True) -> Path:
-    chosen = version or os.environ.get("SWAIN_CLI_GENERATOR_VERSION")
+    chosen = version or os.environ.get(GENERATOR_VERSION_ENV_VAR)
     if not chosen:
         chosen = PINNED_GENERATOR_VERSION
     jar_path = jar_cache_dir(create=False) / chosen / f"openapi-generator-cli-{chosen}.jar"

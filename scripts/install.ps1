@@ -3,7 +3,7 @@
 # Usage (PowerShell):
 #   iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
 # Optional:
-#   $env:VERSION = 'v0.3.10'; iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
+#   $env:VERSION = 'vX.Y.Z'; iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
@@ -21,15 +21,23 @@ switch -Regex ($Arch) {
 $asset = "swain_cli-windows-$arch.exe"
 $baseUrl = "https://github.com/$Repo/releases/download/$Version/$asset"
 $tmp = New-TemporaryFile
+$tmpPath = $tmp.FullName
 
 Write-Host "Downloading $asset ..."
+$invokeParams = @{
+  OutFile = $tmpPath
+  MaximumRedirection = 5
+  ErrorAction = 'Stop'
+}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $invokeParams.UseBasicParsing = $true }
+
 try {
-  Invoke-WebRequest -Uri $baseUrl -OutFile $tmp -UseBasicParsing -MaximumRedirection 5 -ErrorAction Stop
+  Invoke-WebRequest -Uri $baseUrl @invokeParams
 } catch {
   if ($Version -eq 'latest') {
     $fallback = "https://github.com/$Repo/releases/latest/download/$asset"
     Write-Host "Retrying with latest release asset..."
-    Invoke-WebRequest -Uri $fallback -OutFile $tmp -UseBasicParsing -MaximumRedirection 5 -ErrorAction Stop
+    Invoke-WebRequest -Uri $fallback @invokeParams
   } else {
     throw
   }
@@ -38,7 +46,7 @@ try {
 $installDir = "$env:LOCALAPPDATA\Programs\swain_cli"
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $target = Join-Path $installDir 'swain_cli.exe'
-Move-Item -Force $tmp $target
+Move-Item -Force $tmpPath $target
 
 Write-Host "Installed $target"
 if ($note) { Write-Warning $note }
