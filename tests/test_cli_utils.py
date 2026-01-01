@@ -1,17 +1,26 @@
 import base64
 import json
 import os
+import platform
 from types import SimpleNamespace
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import keyring
+import pytest
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
-import pytest
 from typer.testing import CliRunner
 
+import swain_cli.auth as auth
 import swain_cli.cli as cli
+import swain_cli.constants as constants
+import swain_cli.crudsql as crudsql
+import swain_cli.engine as engine
+import swain_cli.generator as generator
+import swain_cli.swain_api as swain_api
+import swain_cli.urls as urls
+from swain_cli.errors import CLIError
 
 
 class MemoryKeyring(KeyringBackend):
@@ -47,39 +56,39 @@ runner = CliRunner()
 
 
 def test_typescript_alias():
-    assert cli.LANGUAGE_ALIASES["typescript"] == "typescript-axios"
+    assert constants.LANGUAGE_ALIASES["typescript"] == "typescript-axios"
 
 
 def test_normalize_os_variants():
-    assert cli.normalize_os("Darwin") == "macos"
-    assert cli.normalize_os("WINDOWS") == "windows"
-    assert cli.normalize_os("linux") == "linux"
-    assert cli.normalize_os("FreeBSD") == "freebsd"
+    assert engine.normalize_os("Darwin") == "macos"
+    assert engine.normalize_os("WINDOWS") == "windows"
+    assert engine.normalize_os("linux") == "linux"
+    assert engine.normalize_os("FreeBSD") == "freebsd"
 
 
 def test_normalize_arch_variants():
-    assert cli.normalize_arch("x86_64") == "x86_64"
-    assert cli.normalize_arch("AMD64") == "x86_64"
-    assert cli.normalize_arch("arm64") == "arm64"
-    assert cli.normalize_arch("aarch64") == "arm64"
-    assert cli.normalize_arch("riscv64") == "riscv64"
+    assert engine.normalize_arch("x86_64") == "x86_64"
+    assert engine.normalize_arch("AMD64") == "x86_64"
+    assert engine.normalize_arch("arm64") == "arm64"
+    assert engine.normalize_arch("aarch64") == "arm64"
+    assert engine.normalize_arch("riscv64") == "riscv64"
 
 
 def test_cache_root_honors_env(tmp_path, monkeypatch):
     custom = tmp_path / "custom-cache"
-    monkeypatch.setenv(cli.CACHE_ENV_VAR, str(custom))
-    result = cli.cache_root()
+    monkeypatch.setenv(constants.CACHE_ENV_VAR, str(custom))
+    result = engine.cache_root()
     assert result == custom
     assert result.is_dir()
 
 
 def test_get_jre_asset_unsupported(monkeypatch):
-    cli.get_platform_info.cache_clear()
-    monkeypatch.setattr(cli.platform, "system", lambda: "Plan9")
-    monkeypatch.setattr(cli.platform, "machine", lambda: "mips")
-    with pytest.raises(cli.CLIError):
-        cli.get_jre_asset()
-    cli.get_platform_info.cache_clear()
+    engine.get_platform_info.cache_clear()
+    monkeypatch.setattr(platform, "system", lambda: "Plan9")
+    monkeypatch.setattr(platform, "machine", lambda: "mips")
+    with pytest.raises(CLIError):
+        engine.get_jre_asset()
+    engine.get_platform_info.cache_clear()
 
 
 def test_ensure_embedded_jre_reuses_cached_install(tmp_path, monkeypatch):
@@ -87,19 +96,19 @@ def test_ensure_embedded_jre_reuses_cached_install(tmp_path, monkeypatch):
     (runtime_dir / "bin").mkdir(parents=True)
     (runtime_dir / "bin" / "java").write_text("", encoding="utf-8")
     expected_sha = "cached-sha"
-    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
+    (runtime_dir / constants.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
 
-    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
 
     def fail_fetch(*args, **kwargs):
         raise AssertionError("unexpected download while cached JRE is valid")
 
-    monkeypatch.setattr(cli, "fetch_asset_file", fail_fetch)
+    monkeypatch.setattr(engine, "fetch_asset_file", fail_fetch)
 
-    assert cli.ensure_embedded_jre(force=False) == runtime_dir
+    assert engine.ensure_embedded_jre(force=False) == runtime_dir
     assert (runtime_dir / "bin" / "java").exists()
 
 
@@ -107,13 +116,13 @@ def test_ensure_embedded_jre_reinstalls_on_marker_mismatch(tmp_path, monkeypatch
     runtime_dir = tmp_path / "jre"
     (runtime_dir / "bin").mkdir(parents=True)
     (runtime_dir / "bin" / "java").write_text("old", encoding="utf-8")
-    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text("old-sha", encoding="utf-8")
+    (runtime_dir / constants.JRE_MARKER_FILENAME).write_text("old-sha", encoding="utf-8")
     expected_sha = "new-sha"
 
-    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
 
     calls = {"fetches": 0}
 
@@ -128,13 +137,13 @@ def test_ensure_embedded_jre_reinstalls_on_marker_mismatch(tmp_path, monkeypatch
         (dest / "bin").mkdir(parents=True, exist_ok=True)
         (dest / "bin" / "java").write_text("new", encoding="utf-8")
 
-    monkeypatch.setattr(cli, "fetch_asset_file", fake_fetch)
-    monkeypatch.setattr(cli, "extract_archive", fake_extract)
-    monkeypatch.setattr(cli, "normalize_runtime_dir", lambda *_: None)
+    monkeypatch.setattr(engine, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(engine, "extract_archive", fake_extract)
+    monkeypatch.setattr(engine, "normalize_runtime_dir", lambda *_: None)
 
-    assert cli.ensure_embedded_jre(force=False) == runtime_dir
+    assert engine.ensure_embedded_jre(force=False) == runtime_dir
     assert calls["fetches"] == 1
-    assert (runtime_dir / cli.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
+    assert (runtime_dir / constants.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
     assert (runtime_dir / "bin" / "java").read_text(encoding="utf-8") == "new"
 
 
@@ -143,12 +152,12 @@ def test_ensure_embedded_jre_force_reinstalls(tmp_path, monkeypatch):
     (runtime_dir / "bin").mkdir(parents=True)
     (runtime_dir / "bin" / "java").write_text("old", encoding="utf-8")
     expected_sha = "force-sha"
-    (runtime_dir / cli.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
+    (runtime_dir / constants.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
 
-    monkeypatch.setattr(cli, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(cli, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(cli, "get_jre_asset", lambda: cli.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(cli, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
 
     observed = {"force": None}
 
@@ -160,13 +169,13 @@ def test_ensure_embedded_jre_force_reinstalls(tmp_path, monkeypatch):
         (dest / "bin").mkdir(parents=True, exist_ok=True)
         (dest / "bin" / "java").write_text("new", encoding="utf-8")
 
-    monkeypatch.setattr(cli, "fetch_asset_file", fake_fetch)
-    monkeypatch.setattr(cli, "extract_archive", fake_extract)
-    monkeypatch.setattr(cli, "normalize_runtime_dir", lambda *_: None)
+    monkeypatch.setattr(engine, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(engine, "extract_archive", fake_extract)
+    monkeypatch.setattr(engine, "normalize_runtime_dir", lambda *_: None)
 
-    assert cli.ensure_embedded_jre(force=True) == runtime_dir
+    assert engine.ensure_embedded_jre(force=True) == runtime_dir
     assert observed["force"] is True
-    assert (runtime_dir / cli.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
+    assert (runtime_dir / constants.JRE_MARKER_FILENAME).read_text(encoding="utf-8").strip() == expected_sha
     assert (runtime_dir / "bin" / "java").read_text(encoding="utf-8") == "new"
 
 
@@ -178,7 +187,7 @@ def test_cli_help_invocation():
 
 def test_cli_without_command_shows_help():
     result = runner.invoke(cli.app, [])
-    assert result.exit_code == cli.EXIT_CODE_USAGE
+    assert result.exit_code == constants.EXIT_CODE_USAGE
     assert "Commands" in result.stdout
 
 
@@ -229,7 +238,7 @@ def test_build_generate_command_alias(tmp_path):
         skip_validate_spec=False,
         verbose=False,
     )
-    resolved, target, cmd = cli.build_generate_command(
+    resolved, target, cmd = generator.build_generate_command(
         "schema.yaml", "typescript", args, tmp_path
     )
     assert resolved == "typescript-axios"
@@ -247,24 +256,24 @@ def test_build_generate_command_alias(tmp_path):
 
 def test_crudsql_dynamic_swagger_url_variants():
     assert (
-        cli.crudsql_dynamic_swagger_url("https://api.example.com")
+        urls.crudsql_dynamic_swagger_url("https://api.example.com")
         == "https://api.example.com/api/dynamic_swagger"
     )
     assert (
-        cli.crudsql_dynamic_swagger_url("https://api.example.com/base")
+        urls.crudsql_dynamic_swagger_url("https://api.example.com/base")
         == "https://api.example.com/base/api/dynamic_swagger"
     )
-    with pytest.raises(cli.CLIError):
-        cli.crudsql_dynamic_swagger_url("api.example.com")
+    with pytest.raises(CLIError):
+        urls.crudsql_dynamic_swagger_url("api.example.com")
 
 
 def test_swain_url_enforces_api_prefix_by_default():
-    url = cli._swain_url("https://api.example.com", "Project")
+    url = urls._swain_url("https://api.example.com", "Project")
     assert str(url) == "https://api.example.com/api/Project"
 
 
 def test_swain_url_can_skip_api_prefix():
-    url = cli._swain_url(
+    url = urls._swain_url(
         "https://api.example.com",
         "auth/login",
         enforce_api_prefix=False,
@@ -335,28 +344,28 @@ def make_jwt(payload: Dict[str, Any]) -> str:
 
 def test_determine_swain_tenant_id_env(monkeypatch):
     token = make_jwt({"tenant_ids": [1, 2, 3]})
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "600")
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "600")
     result = cli.determine_swain_tenant_id(
-        cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
+        constants.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
     )
     assert result == "600"
 
 
 def test_determine_swain_tenant_id_single_claim(monkeypatch):
     token = make_jwt({"tenant_ids": [987]})
-    monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
+    monkeypatch.delenv(constants.TENANT_ID_ENV_VAR, raising=False)
     result = cli.determine_swain_tenant_id(
-        cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
+        constants.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
     )
     assert result == "987"
 
 
 def test_determine_swain_tenant_id_multiple_claims_requires_choice(monkeypatch):
     token = make_jwt({"tenant_ids": [10, 20]})
-    monkeypatch.delenv(cli.TENANT_ID_ENV_VAR, raising=False)
-    with pytest.raises(cli.CLIError):
+    monkeypatch.delenv(constants.TENANT_ID_ENV_VAR, raising=False)
+    with pytest.raises(CLIError):
         cli.determine_swain_tenant_id(
-            cli.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
+            constants.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
         )
 
 
@@ -377,8 +386,8 @@ def test_fetch_crudsql_schema_success(monkeypatch, tmp_path):
             return FakeClient([discovery], calls)
         return FakeClient([schema], calls)
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    temp_path = cli.fetch_crudsql_schema(
+    monkeypatch.setattr(crudsql.httpx, "Client", fake_client)
+    temp_path = crudsql.fetch_crudsql_schema(
         "https://api.example.com",
         "token123",
         tenant_id="42",
@@ -411,9 +420,9 @@ def test_fetch_crudsql_schema_http_error(monkeypatch):
     def fake_client(**kwargs):
         return FakeClient([response])
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    with pytest.raises(cli.CLIError) as excinfo:
-        cli.fetch_crudsql_schema(
+    monkeypatch.setattr(crudsql.httpx, "Client", fake_client)
+    with pytest.raises(CLIError) as excinfo:
+        crudsql.fetch_crudsql_schema(
             "https://api.example.com",
             "token123",
             tenant_id="88",
@@ -441,8 +450,8 @@ def test_fetch_crudsql_schema_falls_back(monkeypatch):
             return FakeClient([discovery])
         return FakeClient([schema])
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    temp_path = cli.fetch_crudsql_schema(
+    monkeypatch.setattr(crudsql.httpx, "Client", fake_client)
+    temp_path = crudsql.fetch_crudsql_schema(
         "https://api.example.com",
         "token123",
         tenant_id="55",
@@ -456,8 +465,8 @@ def test_fetch_crudsql_schema_falls_back(monkeypatch):
 def test_extract_archive_unknown(tmp_path):
     archive = tmp_path / "archive.xyz"
     archive.write_text("dummy")
-    with pytest.raises(cli.CLIError):
-        cli.extract_archive(archive, tmp_path / "out")
+    with pytest.raises(CLIError):
+        engine.extract_archive(archive, tmp_path / "out")
 
 
 def test_swain_login_with_credentials_success(monkeypatch):
@@ -470,8 +479,8 @@ def test_swain_login_with_credentials_success(monkeypatch):
     def fake_client(**kwargs):
         return FakeClient([response])
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    data = cli.swain_login_with_credentials(
+    monkeypatch.setattr(auth.httpx, "Client", fake_client)
+    data = auth.swain_login_with_credentials(
         "https://api.example.com", "user@example.com", "secret"
     )
     assert data["token"] == "abc"
@@ -485,22 +494,22 @@ def test_read_login_token_with_credentials(monkeypatch):
         assert password == "wonderland"
         return {"token": "abc", "refresh_token": "refresh"}
 
-    monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
+    monkeypatch.setattr(auth, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
         username="alice",
         password="wonderland",
         auth_base_url="https://api.example.com",
     )
-    token = cli.read_login_token(args)
+    token = auth.read_login_token(args)
     assert token == "abc"
     assert getattr(args, "login_refresh_token") == "refresh"
 
 
 def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
-    monkeypatch.setattr(cli, "prompt_text", lambda *a, **k: "bob")
-    monkeypatch.setattr(cli, "prompt_password", lambda *a, **k: "builder")
+    monkeypatch.setattr(auth, "prompt_text", lambda *a, **k: "bob")
+    monkeypatch.setattr(auth, "prompt_password", lambda *a, **k: "builder")
     monkeypatch.setattr(
-        cli,
+        auth,
         "swain_login_with_credentials",
         lambda base, user, pwd: {"token": "xyz", "refresh_token": None},
     )
@@ -509,7 +518,7 @@ def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
         password=None,
         auth_base_url=None,
     )
-    token = cli.read_login_token(args)
+    token = auth.read_login_token(args)
     assert token == "xyz"
     assert getattr(args, "login_refresh_token") is None
 
@@ -520,21 +529,21 @@ def test_handle_auth_login_with_credentials(monkeypatch):
         assert password == "password123"
         return {"token": "new-token", "refresh_token": "new-refresh"}
 
-    monkeypatch.setattr(cli, "swain_login_with_credentials", fake_login)
+    monkeypatch.setattr(auth, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
         username="carol",
         password="password123",
         auth_base_url="https://api.swain.technology",
     )
-    assert cli.handle_auth_login(args) == 0
-    state = cli.load_auth_state()
+    assert auth.handle_auth_login(args) == 0
+    state = auth.load_auth_state()
     assert state.access_token == "new-token"
     assert state.refresh_token == "new-refresh"
 
 
 def test_interactive_auth_setup_prompts_credentials(monkeypatch):
-    monkeypatch.setattr(cli, "resolve_auth_token", lambda: None)
-    monkeypatch.setattr(cli, "prompt_confirm", lambda prompt, default=True: True)
+    monkeypatch.setattr(auth, "resolve_auth_token", lambda: None)
+    monkeypatch.setattr(auth, "prompt_confirm", lambda prompt, default=True: True)
 
     captured_args: Dict[str, Any] = {}
 
@@ -543,7 +552,7 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
         setattr(ns, "login_refresh_token", "refresh-token")
         return "credential-token"
 
-    monkeypatch.setattr(cli, "read_login_token", fake_read_login_token)
+    monkeypatch.setattr(auth, "read_login_token", fake_read_login_token)
 
     captured_persist: Dict[str, Optional[str]] = {}
 
@@ -551,9 +560,9 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
         captured_persist["token"] = token
         captured_persist["refresh"] = refresh
 
-    monkeypatch.setattr(cli, "persist_auth_token", fake_persist)
+    monkeypatch.setattr(auth, "persist_auth_token", fake_persist)
 
-    cli.interactive_auth_setup(auth_base_url="https://auth.example.com")
+    auth.interactive_auth_setup(auth_base_url="https://auth.example.com")
 
     assert captured_args["auth_base_url"] == "https://auth.example.com"
     assert captured_persist["token"] == "credential-token"
@@ -561,9 +570,9 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
 
 
 def test_auth_logout_removes_token():
-    cli.persist_auth_token("supersecret", None)
-    assert cli.handle_auth_logout(SimpleNamespace()) == 0
-    state = cli.load_auth_state()
+    auth.persist_auth_token("supersecret", None)
+    assert auth.handle_auth_logout(SimpleNamespace()) == 0
+    state = auth.load_auth_state()
     assert state.access_token is None
     assert state.refresh_token is None
 
@@ -575,17 +584,17 @@ def test_parse_checksum_file_variants(tmp_path):
     # Bare digest
     p1 = tmp_path / "bare.sha256"
     p1.write_text(f"{digest}\n")
-    assert cli.parse_checksum_file(p1) == digest
+    assert engine.parse_checksum_file(p1) == digest
 
     # GNU coreutils format: "<hex>  filename"
     p2 = tmp_path / "gnu.sha256"
     p2.write_text(f"{digest}  swain_cli-jre-windows-x86_64.zip\n")
-    assert cli.parse_checksum_file(p2) == digest
+    assert engine.parse_checksum_file(p2) == digest
 
     # BSD format: "SHA256 (file) = <hex>"
     p3 = tmp_path / "bsd.sha256"
     p3.write_text(f"SHA256 (swain_cli-jre-windows-x86_64.zip) = {digest}\n")
-    assert cli.parse_checksum_file(p3) == digest
+    assert engine.parse_checksum_file(p3) == digest
 
     # PowerShell Get-FileHash style (header + values)
     p4 = tmp_path / "ps.sha256"
@@ -593,12 +602,12 @@ def test_parse_checksum_file_variants(tmp_path):
         "Algorithm       Hash                                                       Path\n"
         f"SHA256          {digest.upper()}   C:\\tmp\\swain_cli-jre-windows-x86_64.zip\n"
     )
-    assert cli.parse_checksum_file(p4) == digest
+    assert engine.parse_checksum_file(p4) == digest
 
 
 def test_auth_status_prefers_env(monkeypatch, capfd):
-    monkeypatch.setenv(cli.AUTH_TOKEN_ENV_VAR, "env-token-value")
-    assert cli.handle_auth_status(SimpleNamespace()) == 0
+    monkeypatch.setenv(constants.AUTH_TOKEN_ENV_VAR, "env-token-value")
+    assert auth.handle_auth_status(SimpleNamespace()) == 0
     out, err = capfd.readouterr()
     assert "environment variable" in out
     assert "env-token-value" not in out
@@ -609,7 +618,7 @@ def test_auth_status_prefers_env(monkeypatch, capfd):
 def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
 
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "101")
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "101")
 
     def fake_fetch(url, token, tenant_id=None):
         assert url == "https://api.example.com"
@@ -625,10 +634,10 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
         captured["java_opts"] = java_opts
         return 0, ""
 
-    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-abc")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+    monkeypatch.setattr(generator, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token-abc")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
     args = SimpleNamespace(
         generator_version=None,
@@ -649,12 +658,12 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
         swain_tenant_id=None,
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert "cmd" in captured
-    assert captured.get("java_opts") == cli.DEFAULT_JAVA_OPTS
+    assert captured.get("java_opts") == constants.DEFAULT_JAVA_OPTS
     cmd = captured["cmd"]
-    assert cli.SKIP_OPERATION_EXAMPLE_FLAG in cmd
-    assert any(cli.GLOBAL_PROPERTY_DISABLE_DOCS in part for part in cmd)
+    assert constants.SKIP_OPERATION_EXAMPLE_FLAG in cmd
+    assert any(constants.GLOBAL_PROPERTY_DISABLE_DOCS in part for part in cmd)
     assert not schema_file.exists()
     assert os.path.isdir(args.out)
 
@@ -672,12 +681,12 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
         captured["swain_base"] = base
         return "11"
 
-    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
-    monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-abc")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(generator, "determine_swain_tenant_id", fake_determine)
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token-abc")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
     monkeypatch.setattr(
-        cli,
+        generator,
         "run_openapi_generator",
         lambda jar, engine, cmd, java_opts: (0, ""),
     )
@@ -702,14 +711,14 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
         verbose=False,
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert captured["swain_base"] == "https://api.example.com"
     assert captured["crud_base"] == "https://api.example.com/crud"
     assert not schema_file.exists()
 
 
 def test_resolve_base_urls_strips_trailing_crud():
-    swain_base, crud_base = cli.resolve_base_urls(
+    swain_base, crud_base = urls.resolve_base_urls(
         "https://dev-api.swain.technology/crud", None
     )
     assert swain_base == "https://dev-api.swain.technology"
@@ -719,20 +728,20 @@ def test_resolve_base_urls_strips_trailing_crud():
 def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
 
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "202")
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "202")
 
     def fake_fetch(url, token, tenant_id=None):
-        assert url == cli.DEFAULT_CRUDSQL_API_BASE_URL
+        assert url == constants.DEFAULT_CRUDSQL_API_BASE_URL
         assert token == "token-default"
         assert tenant_id == "202"
         schema_file.write_text("{}")
         return schema_file
 
-    monkeypatch.setattr(cli, "fetch_crudsql_schema", fake_fetch)
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-default")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "fetch_crudsql_schema", fake_fetch)
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token-default")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
     monkeypatch.setattr(
-        cli,
+        generator,
         "run_openapi_generator",
         lambda jar, engine, cmd, java_opts: (0, ""),
     )
@@ -757,7 +766,7 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
         verbose=False,
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert not schema_file.exists()
     assert out_dir.is_dir()
 
@@ -784,8 +793,8 @@ def test_fetch_swain_projects_parses_pages(monkeypatch):
     def fake_client(**kwargs):
         return FakeClient([page1, page2], calls)
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    projects = cli.fetch_swain_projects(
+    monkeypatch.setattr(swain_api.httpx, "Client", fake_client)
+    projects = swain_api.fetch_swain_projects(
         "https://api.example.com",
         "token",
         tenant_id="999",
@@ -827,8 +836,8 @@ def test_fetch_swain_connections_parses_payload(monkeypatch):
     def fake_client(**kwargs):
         return FakeClient([response], calls)
 
-    monkeypatch.setattr(cli.httpx, "Client", fake_client)
-    connections = cli.fetch_swain_connections(
+    monkeypatch.setattr(swain_api.httpx, "Client", fake_client)
+    connections = swain_api.fetch_swain_connections(
         "https://api.example.com",
         "token",
         tenant_id="777",
@@ -846,7 +855,7 @@ def test_fetch_swain_connections_parses_payload(monkeypatch):
 
 
 def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
-    connection = cli.SwainConnection(
+    connection = swain_api.SwainConnection(
         id=77,
         database_name="main-db",
         driver="postgres",
@@ -875,21 +884,17 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         captured["java_opts"] = java_opts
         return 0, ""
 
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "303")
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "303")
 
     def fake_fetch_connection(base, token, cid, tenant_id=None):
         assert tenant_id == "303"
         return connection
 
-    monkeypatch.setattr(
-        cli,
-        "fetch_swain_connection_by_id",
-        fake_fetch_connection,
-    )
-    monkeypatch.setattr(cli, "fetch_swain_connection_schema", fake_fetch_schema)
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-swain")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+    monkeypatch.setattr(generator, "fetch_swain_connection_by_id", fake_fetch_connection)
+    monkeypatch.setattr(generator, "fetch_swain_connection_schema", fake_fetch_schema)
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token-swain")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
     args = SimpleNamespace(
         generator_version=None,
@@ -910,9 +915,9 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         verbose=False,
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert "cmd" in captured
-    assert captured.get("java_opts") == cli.DEFAULT_JAVA_OPTS
+    assert captured.get("java_opts") == constants.DEFAULT_JAVA_OPTS
     assert not schema_file.exists()
 
 
@@ -920,11 +925,11 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
     schema_file = tmp_path / "schema.json"
     schema_file.write_text("{}")
 
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "999")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token" )
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "999")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token")
     monkeypatch.setattr(
-        cli,
+        generator,
         "fetch_crudsql_schema",
         lambda base, token, tenant_id=None: schema_file,
     )
@@ -934,14 +939,16 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
     def fake_run(jar, engine, cmd, java_opts):
         call_index = len(calls)
         if call_index == 0:
-            assert java_opts == cli.DEFAULT_JAVA_OPTS
+            assert java_opts == constants.DEFAULT_JAVA_OPTS
             calls.append((java_opts, call_index))
             return 1, "java.lang.OutOfMemoryError"
-        assert any(opt.startswith(cli.FALLBACK_JAVA_HEAP_OPTION) for opt in java_opts)
+        assert any(
+            opt.startswith(constants.FALLBACK_JAVA_HEAP_OPTION) for opt in java_opts
+        )
         calls.append((java_opts, call_index))
         return 0, ""
 
-    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
     args = SimpleNamespace(
         generator_version=None,
@@ -962,7 +969,7 @@ def test_handle_gen_retries_on_out_of_memory(monkeypatch, tmp_path):
         swain_tenant_id=None,
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert len(calls) == 2
 
 
@@ -970,11 +977,11 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
     schema_file = tmp_path / "schema.json"
     schema_file.write_text("{}")
 
-    monkeypatch.setenv(cli.TENANT_ID_ENV_VAR, "777")
-    monkeypatch.setattr(cli, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token")
+    monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "777")
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token")
     monkeypatch.setattr(
-        cli,
+        generator,
         "fetch_crudsql_schema",
         lambda base, token, tenant_id=None: schema_file,
     )
@@ -987,7 +994,7 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
             return 1, "java.lang.OutOfMemoryError"
         return 0, ""
 
-    monkeypatch.setattr(cli, "run_openapi_generator", fake_run)
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
     args = SimpleNamespace(
         generator_version=None,
@@ -1009,15 +1016,15 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
         java_opts=["-Xmx6g"],
     )
 
-    assert cli.handle_gen(args) == 0
+    assert generator.handle_gen(args) == 0
     assert len(calls) == 2
     first_cmd, second_cmd = calls
     assert any("apiDocs=false" in part for part in first_cmd)
     assert any("apiDocs=false" in part for part in second_cmd)
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
-    project = cli.SwainProject(id=1, name="Project", raw={})
-    connection = cli.SwainConnection(
+    project = swain_api.SwainProject(id=1, name="Project", raw={})
+    connection = swain_api.SwainConnection(
         id=2,
         database_name="main-db",
         driver="postgres",
@@ -1064,12 +1071,12 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
         lambda base, token, provided, *, allow_prompt: provided,
     )
     monkeypatch.setattr(
-        cli,
+        swain_api,
         "fetch_swain_projects",
         lambda base, token, tenant_id=None, **_: [project],
     )
     monkeypatch.setattr(
-        cli,
+        swain_api,
         "fetch_swain_connections",
         lambda base, token, tenant_id=None, project_id=None, **_: [connection],
     )
@@ -1088,8 +1095,8 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
 
 
 def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
-    project = cli.SwainProject(id=102, name="Project", raw={})
-    connection = cli.SwainConnection(
+    project = swain_api.SwainProject(id=102, name="Project", raw={})
+    connection = swain_api.SwainConnection(
         id=110,
         database_name="main-db",
         driver="postgres",
@@ -1157,8 +1164,8 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         seen_bases.append(base)
         return [connection]
 
-    monkeypatch.setattr(cli, "fetch_swain_projects", fake_fetch_projects)
-    monkeypatch.setattr(cli, "fetch_swain_connections", fake_fetch_connections)
+    monkeypatch.setattr(swain_api, "fetch_swain_projects", fake_fetch_projects)
+    monkeypatch.setattr(swain_api, "fetch_swain_connections", fake_fetch_connections)
 
     captured: Dict[str, Any] = {}
 
@@ -1185,8 +1192,8 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.java_opts == ["-Xmx5g"]
     assert passed_args.generator_arg == [
         "--global-property=apis=Job",
-        f"--global-property={cli.GLOBAL_PROPERTY_DISABLE_DOCS}",
-        cli.SKIP_OPERATION_EXAMPLE_FLAG,
+        f"--global-property={constants.GLOBAL_PROPERTY_DISABLE_DOCS}",
+        constants.SKIP_OPERATION_EXAMPLE_FLAG,
     ]
     assert passed_args.swain_base_url == "https://api.example.com"
     assert passed_args.crudsql_url is None

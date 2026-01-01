@@ -83,11 +83,11 @@ Run `swain_cli --help` or `swain_cli <command> --help` for full usage.
 ## Authentication
 Use the `auth` subcommands to prepare credentials before generating SDKs against hosted Swain projects.
 
-- `swain_cli auth login` — provide an access token via `--token <value>`, pipe it with `--stdin`, or let the CLI prompt securely. Tokens are stored in the system keyring unless you set `SWAIN_CLI_AUTH_TOKEN`.
-- `swain_cli auth login --credentials --username you@example.com` — authenticate via username/password (`POST /auth/login`). Access and refresh tokens are stored automatically.
+- `swain_cli auth login` — authenticate via username/password (`POST /auth/login`). Access and refresh tokens are stored in the system keyring.
+- For ephemeral automation, set `SWAIN_CLI_AUTH_TOKEN` (takes precedence over the keyring).
 - `swain_cli auth status` — inspect the active token source and storage location.
 - `swain_cli auth logout` — clear the stored token.
-- The interactive wizard checks for a token before listing projects and will prompt you to add or replace one if missing.
+- The interactive wizard checks for a token before listing projects and will prompt you to sign in if missing.
 
 ## Engine modes and caching
 - **Embedded engine (default)** — the first run downloads a platform-specific Temurin JRE and caches it alongside the pinned OpenAPI Generator JAR under `~/.cache/swain_cli` (Linux), `~/Library/Caches/swain_cli` (macOS), or `%LOCALAPPDATA%\swain_cli\cache` (Windows). Override with `SWAIN_CLI_CACHE_DIR`.
@@ -108,13 +108,13 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 
 ## Contributing
 1. Create a virtual environment (`python -m venv .venv`) and activate it.
-2. Install the project with dev extras: `pip install -e .[dev]`.
+2. Install the project with dev + lint extras: `pip install -e .[dev,lint]`.
 3. Run the CLI locally via `python -m swain_cli.cli --help` or the `swain_cli` entry point.
-4. Add or update tests and run `python -m pytest`.
+4. Run checks: `ruff check .`, `python -m mypy swain_cli`, and `python -m pytest`.
 
 ## Maintainers
 - Trigger the `build-jre` workflow (workflow dispatch) to build trimmed JRE archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows. Provide an optional `release_tag` to publish directly to a `jre-<version>` release.
-- Copy the resulting `.sha256` values into `swain_cli/cli.py` so downloads can be verified, and update `ASSET_BASE` if you move assets to a new release tag.
+- Copy the resulting `.sha256` values into `swain_cli/constants.py` so downloads can be verified, and update `ASSET_BASE` if you move assets to a new release tag.
 - Tag releases (`git tag vX.Y.Z`) once assets are ready. The full release runbook lives in `docs/RELEASING.md`.
 
 ## Third-party notices
