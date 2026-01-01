@@ -4,7 +4,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 
 ## Quick reference
 - **Version bumps** — update `swain_cli/__init__.py` (packaging version is sourced from `__version__`) and any other user-facing version strings.
-- **Embedded assets** — refresh JRE checksums plus the `ASSET_BASE` constant in `swain_cli/cli.py` whenever download locations change.
+- **Embedded assets** — refresh JRE checksums (`JRE_ASSETS`) plus the `ASSET_BASE` constant in `swain_cli/constants.py` whenever download locations change.
 - **Automation** — `release.yml` builds JREs, publishes to PyPI via Trusted Publishing (OIDC), and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across the supported Python versions on every push/PR.
 - **Homebrew tap** — bump the version/URLs/checksums in `Formula/swain_cli.rb` so `brew upgrade` can pick up the release.
 
@@ -27,7 +27,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 ### 2. Update embedded JRE assets (only when needed)
 1. Launch the `build-jre` workflow from the GitHub Actions UI.
 2. Supply the desired Temurin version and optional `release_tag` (typically `jre-<version>`). The workflow runs the scripts in `scripts/` to produce trimmed archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows.
-3. When the workflow finishes, download the `.sha256` files from the run and paste the sums into `swain_cli/cli.py`.
+3. When the workflow finishes, download the `.sha256` files from the run and paste the sums into `swain_cli/constants.py` (the `JRE_ASSETS` mapping).
 4. Upload the new archives and checksum files to the release specified by `release_tag` (or manually to the appropriate release if you omitted it).
 
 ### 3. Finalise version bumps

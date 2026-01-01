@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import httpx
 import pooch
@@ -32,48 +32,14 @@ from .constants import (
     GENERATOR_VERSION_ENV_VAR,
     HTTP_TIMEOUT_SECONDS,
     JAVA_OPTS_ENV_VAR,
+    JRE_ASSETS,
     JRE_MARKER_FILENAME,
     PINNED_GENERATOR_SHA256,
     PINNED_GENERATOR_VERSION,
+    JREAsset,
 )
 from .errors import CLIError
 from .utils import format_cli_command
-
-
-@dataclass(frozen=True)
-class JREAsset:
-    filename: str
-    sha256: Optional[str]
-    checksum_filename: Optional[str] = None
-
-
-JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
-    ("linux", "x86_64"): JREAsset(
-        "swain_cli-jre-linux-x86_64.tar.gz",
-        None,
-        "swain_cli-jre-linux-x86_64.tar.gz.sha256",
-    ),
-    ("linux", "arm64"): JREAsset(
-        "swain_cli-jre-linux-arm64.tar.gz",
-        None,
-        "swain_cli-jre-linux-arm64.tar.gz.sha256",
-    ),
-    ("macos", "x86_64"): JREAsset(
-        "swain_cli-jre-macos-x86_64.tar.gz",
-        "6574e6f5f20633ecfa95202d6e5a196936f90f300c0c99f00f34df8ad5e8aeb6",
-        "swain_cli-jre-macos-x86_64.tar.gz.sha256",
-    ),
-    ("macos", "arm64"): JREAsset(
-        "swain_cli-jre-macos-arm64.tar.gz",
-        "770b81834bdcb70b9af0fe6c7b5e24ed287553f91380e543862e59f9bb72f9ea",
-        "swain_cli-jre-macos-arm64.tar.gz.sha256",
-    ),
-    ("windows", "x86_64"): JREAsset(
-        "swain_cli-jre-windows-x86_64.zip",
-        None,
-        "swain_cli-jre-windows-x86_64.zip.sha256",
-    ),
-}
 
 
 @dataclass(frozen=True)

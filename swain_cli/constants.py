@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
+
 PINNED_GENERATOR_VERSION = "7.6.0"
 PINNED_GENERATOR_SHA256 = "35074bdd3cdfc46be9a902e11a54a3faa3cae1e34eb66cbd959d1c8070bbd7d7"
 # JRE assets were renamed after v0.3.0; use v0.3.2 where
@@ -50,3 +53,39 @@ COMMON_LANGUAGES = [
 
 HTTP_TIMEOUT_SECONDS = 30.0
 JRE_MARKER_FILENAME = ".swain_cli_jre_asset_sha256"
+
+
+@dataclass(frozen=True)
+class JREAsset:
+    filename: str
+    sha256: Optional[str]
+    checksum_filename: Optional[str] = None
+
+
+JRE_ASSETS: Dict[Tuple[str, str], JREAsset] = {
+    ("linux", "x86_64"): JREAsset(
+        "swain_cli-jre-linux-x86_64.tar.gz",
+        "e31f7c29d501ea038080ae39495699493105331e004bc9f8920d4f0454e809b0",
+        "swain_cli-jre-linux-x86_64.tar.gz.sha256",
+    ),
+    ("linux", "arm64"): JREAsset(
+        "swain_cli-jre-linux-arm64.tar.gz",
+        "60340b7b8e5ed66a0d90e4a9645a4ca84f8e202fc181a10fbfc8a17b0bef0706",
+        "swain_cli-jre-linux-arm64.tar.gz.sha256",
+    ),
+    ("macos", "x86_64"): JREAsset(
+        "swain_cli-jre-macos-x86_64.tar.gz",
+        "9322927079799a49322a708836c6150c2c699d2b8dab160666197a44c838a396",
+        "swain_cli-jre-macos-x86_64.tar.gz.sha256",
+    ),
+    ("macos", "arm64"): JREAsset(
+        "swain_cli-jre-macos-arm64.tar.gz",
+        "770b81834bdcb70b9af0fe6c7b5e24ed287553f91380e543862e59f9bb72f9ea",
+        "swain_cli-jre-macos-arm64.tar.gz.sha256",
+    ),
+    ("windows", "x86_64"): JREAsset(
+        "swain_cli-jre-windows-x86_64.zip",
+        "3d359a6c4631bcc891635b2ee8a541b44ac7c11a608db40d0a8d579fa999aa57",
+        "swain_cli-jre-windows-x86_64.zip.sha256",
+    ),
+}

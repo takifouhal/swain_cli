@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import questionary
 import typer
@@ -76,6 +76,15 @@ app.add_typer(engine_app, name="engine")
 @dataclass
 class CLIContext:
     generator_version: Optional[str] = None
+
+
+def _run_handler(handler: Callable[[SimpleNamespace], int], args: SimpleNamespace) -> None:
+    try:
+        rc = handler(args)
+    except CLIError as exc:
+        log_error(f"error: {exc}")
+        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
+    raise typer.Exit(code=rc)
 
 
 def handle_doctor(args: SimpleNamespace) -> int:
@@ -373,12 +382,7 @@ def cli_callback(
 @app.command()
 def doctor(ctx: typer.Context) -> None:
     args = SimpleNamespace(generator_version=ctx.obj.generator_version)
-    try:
-        rc = handle_doctor(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_doctor, args)
 
 
 @app.command("list-generators")
@@ -398,12 +402,7 @@ def list_generators(
         engine=engine.lower(),
         java_opts=[],
     )
-    try:
-        rc = handle_list_generators(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_list_generators, args)
 
 
 @app.command()
@@ -505,12 +504,7 @@ def gen(
         skip_validate_spec=skip_validate_spec,
         verbose=verbose,
     )
-    try:
-        rc = handle_gen(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_gen, args)
 
 
 @app.command()
@@ -553,12 +547,7 @@ def interactive(
         crudsql_url=crudsql_url,
         engine=engine.lower(),
     )
-    try:
-        rc = handle_interactive(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_interactive, args)
 
 
 @auth_app.command("login")
@@ -585,30 +574,22 @@ def auth_login(
         password=password,
         auth_base_url=auth_base_url,
     )
-    try:
-        rc = handle_auth_login(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_auth_login, args)
 
 
 @auth_app.command("logout")
 def auth_logout() -> None:
-    rc = handle_auth_logout(SimpleNamespace())
-    raise typer.Exit(code=rc)
+    _run_handler(handle_auth_logout, SimpleNamespace())
 
 
 @auth_app.command("status")
 def auth_status() -> None:
-    rc = handle_auth_status(SimpleNamespace())
-    raise typer.Exit(code=rc)
+    _run_handler(handle_auth_status, SimpleNamespace())
 
 
 @engine_app.command("status")
 def engine_status() -> None:
-    rc = handle_engine_status(SimpleNamespace())
-    raise typer.Exit(code=rc)
+    _run_handler(handle_engine_status, SimpleNamespace())
 
 
 @engine_app.command("install-jre")
@@ -620,12 +601,7 @@ def engine_install_jre(
     )
 ) -> None:
     args = SimpleNamespace(force=force)
-    try:
-        rc = handle_engine_install_jre(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_engine_install_jre, args)
 
 
 @engine_app.command("update-jar")
@@ -633,24 +609,17 @@ def engine_update_jar(
     version: str = typer.Option(..., "--version", help="OpenAPI Generator version to download")
 ) -> None:
     args = SimpleNamespace(version=version)
-    try:
-        rc = handle_engine_update_jar(args)
-    except CLIError as exc:
-        log_error(f"error: {exc}")
-        raise typer.Exit(code=EXIT_CODE_USAGE) from exc
-    raise typer.Exit(code=rc)
+    _run_handler(handle_engine_update_jar, args)
 
 
 @engine_app.command("use-system")
 def engine_use_system() -> None:
-    rc = handle_engine_use_system(SimpleNamespace())
-    raise typer.Exit(code=rc)
+    _run_handler(handle_engine_use_system, SimpleNamespace())
 
 
 @engine_app.command("use-embedded")
 def engine_use_embedded() -> None:
-    rc = handle_engine_use_embedded(SimpleNamespace())
-    raise typer.Exit(code=rc)
+    _run_handler(handle_engine_use_embedded, SimpleNamespace())
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

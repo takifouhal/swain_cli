@@ -19,6 +19,24 @@ on:
         description: 'GitHub release tag for assets (created if missing). Leave blank to skip upload.'
         required: false
         default: 'jre-21.0.4'
+  workflow_call:
+    inputs:
+      jdk_major:
+        type: string
+        required: false
+        default: '21'
+      jdk_version:
+        type: string
+        required: false
+        default: '21.0.4'
+      jdk_build:
+        type: string
+        required: false
+        default: '7'
+      release_tag:
+        type: string
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -113,6 +131,8 @@ jobs:
     needs: build
     if: inputs.release_tag != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

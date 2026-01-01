@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import platform
+import re
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -80,6 +81,15 @@ def test_cache_root_honors_env(tmp_path, monkeypatch):
     result = engine.cache_root()
     assert result == custom
     assert result.is_dir()
+
+
+def test_jre_assets_have_pinned_checksums():
+    for key, asset in constants.JRE_ASSETS.items():
+        assert isinstance(key, tuple)
+        assert asset.sha256 is not None
+        assert re.fullmatch(r"[a-f0-9]{64}", asset.sha256)
+        assert asset.checksum_filename
+        assert asset.checksum_filename.endswith(".sha256")
 
 
 def test_get_jre_asset_unsupported(monkeypatch):

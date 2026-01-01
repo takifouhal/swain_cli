@@ -109,12 +109,12 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 ## Contributing
 1. Create a virtual environment (`python -m venv .venv`) and activate it.
 2. Install the project with dev + lint extras: `pip install -e .[dev,lint]`.
-3. Run the CLI locally via `python -m swain_cli.cli --help` or the `swain_cli` entry point.
+3. Run the CLI locally via `python -m swain_cli --help`, `python -m swain_cli.cli --help`, or the `swain_cli` entry point.
 4. Run checks: `ruff check .`, `python -m mypy swain_cli`, and `python -m pytest`.
 
 ## Maintainers
 - Trigger the `build-jre` workflow (workflow dispatch) to build trimmed JRE archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows. Provide an optional `release_tag` to publish directly to a `jre-<version>` release.
-- Copy the resulting `.sha256` values into `swain_cli/constants.py` so downloads can be verified, and update `ASSET_BASE` if you move assets to a new release tag.
+- Copy the resulting `.sha256` values into `swain_cli/constants.py` (the `JRE_ASSETS` mapping) and update `ASSET_BASE` if you move assets to a new release tag.
 - Tag releases (`git tag vX.Y.Z`) once assets are ready. The full release runbook lives in `docs/RELEASING.md`.
 
 ## Third-party notices
