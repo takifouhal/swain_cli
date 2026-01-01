@@ -10,12 +10,11 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from .auth import _swain_request_headers
 from .console import log
-from .constants import HTTP_TIMEOUT_SECONDS
 from .errors import CLIError
-from .urls import _swain_url
-from .utils import _as_dict, _pick, _safe_int, _safe_str
+from .http import describe_http_error, http_timeout, request_headers
+from .urls import swain_url
+from .utils import as_dict, pick, safe_int, safe_str
 
 
 @dataclass(frozen=True)
@@ -60,9 +59,9 @@ def fetch_swain_projects(
     page_size: int = 50,
     max_pages: int = 25,
 ) -> List[SwainProject]:
-    url = _swain_url(base_url, "Project")
-    headers = _swain_request_headers(token, tenant_id=tenant_id)
-    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    url = swain_url(base_url, "Project")
+    headers = request_headers(token, tenant_id=tenant_id)
+    timeout = http_timeout()
     projects: List[SwainProject] = []
     page = 1
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
@@ -72,15 +71,7 @@ def fetch_swain_projects(
                 response = client.get(url, headers=headers, params=params)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                detail = ""
-                if isinstance(exc, httpx.HTTPStatusError):
-                    detail = f"{exc.response.status_code} {exc.response.reason_phrase}".strip()
-                    body = exc.response.text.strip()
-                    if body:
-                        first_line = body.splitlines()[0]
-                        detail = f"{detail}: {first_line}" if detail else first_line
-                if not detail:
-                    detail = str(exc)
+                detail = describe_http_error(exc)
                 raise CLIError(f"failed to fetch projects from {url}: {detail}") from exc
             try:
                 payload = response.json()
@@ -91,14 +82,14 @@ def fetch_swain_projects(
             if not isinstance(items, list):
                 raise CLIError("unexpected project payload structure")
             for entry in items:
-                record = _as_dict(entry)
-                project_id = _safe_int(_pick(record, "id", "project_id", "projectId"))
+                record = as_dict(entry)
+                project_id = safe_int(pick(record, "id", "project_id", "projectId"))
                 if project_id is None:
                     continue
-                name = _safe_str(_pick(record, "name"))
+                name = safe_str(pick(record, "name"))
                 if not name:
                     name = f"Project {project_id}"
-                description = _safe_str(_pick(record, "description"))
+                description = safe_str(pick(record, "description"))
                 projects.append(
                     SwainProject(
                         id=project_id,
@@ -108,7 +99,7 @@ def fetch_swain_projects(
                     )
                 )
 
-            total_pages = _safe_int(_pick(payload, "total_pages", "totalPages")) or 1
+            total_pages = safe_int(pick(payload, "total_pages", "totalPages")) or 1
             if page >= total_pages:
                 break
             page += 1
@@ -199,21 +190,21 @@ def _connection_filter_payload(
 
 
 def _parse_swain_connection(record: Dict[str, Any]) -> Optional[SwainConnection]:
-    connection_id = _safe_int(_pick(record, "id", "connection_id", "connectionId"))
+    connection_id = safe_int(pick(record, "id", "connection_id", "connectionId"))
     if connection_id is None:
         return None
-    database_name = _safe_str(
-        _pick(record, "dbname", "database_name", "databaseName", "name")
+    database_name = safe_str(
+        pick(record, "dbname", "database_name", "databaseName", "name")
     )
-    driver = _safe_str(_pick(record, "driver"))
-    stage = _safe_str(_pick(_as_dict(_pick(record, "stage")), "name"))
-    project_name = _safe_str(_pick(_as_dict(_pick(record, "project")), "name"))
-    current_schema = _as_dict(_pick(record, "current_schema", "currentSchema"))
-    schema_name = _safe_str(_pick(current_schema, "name"))
-    current_build = _as_dict(_pick(current_schema, "current_build", "currentBuild"))
-    build_endpoint = _safe_str(_pick(current_build, "api_endpoint", "apiEndpoint"))
-    build_id = _safe_int(_pick(current_build, "id"))
-    connection_endpoint = _safe_str(_pick(record, "api_endpoint", "apiEndpoint"))
+    driver = safe_str(pick(record, "driver"))
+    stage = safe_str(pick(as_dict(pick(record, "stage")), "name"))
+    project_name = safe_str(pick(as_dict(pick(record, "project")), "name"))
+    current_schema = as_dict(pick(record, "current_schema", "currentSchema"))
+    schema_name = safe_str(pick(current_schema, "name"))
+    current_build = as_dict(pick(current_schema, "current_build", "currentBuild"))
+    build_endpoint = safe_str(pick(current_build, "api_endpoint", "apiEndpoint"))
+    build_id = safe_int(pick(current_build, "id"))
+    connection_endpoint = safe_str(pick(record, "api_endpoint", "apiEndpoint"))
     return SwainConnection(
         id=connection_id,
         database_name=database_name,
@@ -237,27 +228,19 @@ def fetch_swain_connections(
     connection_id: Optional[int] = None,
     page_size: int = 100,
 ) -> List[SwainConnection]:
-    url = _swain_url(base_url, "Connection/filter")
-    headers = _swain_request_headers(token, tenant_id=tenant_id)
+    url = swain_url(base_url, "Connection/filter")
+    headers = request_headers(token, tenant_id=tenant_id)
     payload = _connection_filter_payload(
         project_id=project_id, connection_id=connection_id
     )
-    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         params = {"page": 1, "pageSize": page_size}
         try:
             response = client.post(url, headers=headers, params=params, json=payload)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            detail = ""
-            if isinstance(exc, httpx.HTTPStatusError):
-                detail = f"{exc.response.status_code} {exc.response.reason_phrase}".strip()
-                body = exc.response.text.strip()
-                if body:
-                    first_line = body.splitlines()[0]
-                    detail = f"{detail}: {first_line}" if detail else first_line
-            if not detail:
-                detail = str(exc)
+            detail = describe_http_error(exc)
             raise CLIError(f"failed to fetch connections from {url}: {detail}") from exc
         try:
             payload = response.json()
@@ -270,7 +253,7 @@ def fetch_swain_connections(
 
     connections: List[SwainConnection] = []
     for entry in items:
-        record = _as_dict(entry)
+        record = as_dict(entry)
         connection = _parse_swain_connection(record)
         if connection:
             connections.append(connection)
@@ -349,31 +332,21 @@ def fetch_swain_connection_schema(
 ) -> Path:
     # Use the backend proxy so it can mint a per-connection preview JWT and
     # authenticate against the remote CrudSQL instance on our behalf.
-    schema_url = _swain_url(
+    schema_url = swain_url(
         base_url,
         f"connections/{connection.id}/dynamic_swagger",
     )
     log(
         f"fetching connection dynamic swagger from {schema_url} (connection {connection.id})"
     )
-    headers = _swain_request_headers(token, tenant_id=tenant_id)
-    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    headers = request_headers(token, tenant_id=tenant_id)
+    timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         try:
             response = client.get(schema_url, headers=headers)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            detail = ""
-            if isinstance(exc, httpx.HTTPStatusError):
-                status = exc.response.status_code
-                reason = exc.response.reason_phrase
-                detail = f"{status} {reason}".strip()
-                body = exc.response.text.strip()
-                if body:
-                    first_line = body.splitlines()[0]
-                    detail = f"{detail}: {first_line}" if detail else first_line
-            if not detail:
-                detail = str(exc)
+            detail = describe_http_error(exc)
             raise CLIError(
                 f"failed to fetch connection swagger for {connection.id}: {detail}"
             ) from exc
@@ -387,4 +360,3 @@ def fetch_swain_connection_schema(
         raise CLIError(
             f"failed to persist connection swagger for {connection.id}: {exc}"
         ) from exc
-

@@ -31,7 +31,7 @@ from .swain_api import (
     fetch_swain_connection_schema,
 )
 from .urls import resolve_base_urls
-from .utils import _pick, _safe_int, format_cli_command, is_url
+from .utils import format_cli_command, is_url, pick, safe_int
 
 
 def _global_property_mentions_docs(value: str) -> bool:
@@ -213,8 +213,8 @@ def handle_gen(args: SimpleNamespace) -> int:
                         else:
                             raise
                     if project_id_value is not None:
-                        connection_project_id = _safe_int(
-                            _pick(
+                        connection_project_id = safe_int(
+                            pick(
                                 selected_connection.raw,
                                 "project_id",
                                 "projectId",
@@ -328,4 +328,3 @@ def handle_gen(args: SimpleNamespace) -> int:
         if temp_schema:
             temp_schema.unlink(missing_ok=True)
     return 0
-

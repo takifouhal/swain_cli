@@ -27,7 +27,7 @@ def format_cli_command(argv: Sequence[str]) -> str:
     return shlex.join(str(part) for part in argv)
 
 
-def _safe_int(value: Any) -> Optional[int]:
+def safe_int(value: Any) -> Optional[int]:
     try:
         if value is None:
             return None
@@ -38,7 +38,7 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def _safe_str(value: Any) -> Optional[str]:
+def safe_str(value: Any) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, str):
@@ -46,14 +46,20 @@ def _safe_str(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _as_dict(value: Any) -> Dict[str, Any]:
+def as_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {}
 
 
-def _pick(mapping: Dict[str, Any], *keys: str) -> Any:
+def pick(mapping: Dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in mapping:
             return mapping[key]
     return None
+
+
+_safe_int = safe_int
+_safe_str = safe_str
+_as_dict = as_dict
+_pick = pick

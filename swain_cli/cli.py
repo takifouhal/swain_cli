@@ -58,8 +58,8 @@ from .swain_api import (
     swain_dynamic_swagger_from_connection,
 )
 from .urls import (
-    _normalize_base_url,
     crudsql_dynamic_swagger_url,
+    normalize_base_url,
     resolve_base_urls,
 )
 from .utils import (
@@ -253,8 +253,8 @@ def run_interactive(args: SimpleNamespace) -> int:
     out_value = str(Path(out_dir_input).expanduser())
     generator_args = ensure_generator_arg_defaults(generator_args)
     log("configuration preview")
-    swain_base_override = _normalize_base_url(swain_base_arg)
-    crudsql_base_override = _normalize_base_url(crudsql_base_arg)
+    swain_base_override = normalize_base_url(swain_base_arg)
+    crudsql_base_override = normalize_base_url(crudsql_base_arg)
     if swain_connection and swain_project:
         log(f"  swain base: {swain_base}")
         log(f"  crudsql base: {crudsql_base}")

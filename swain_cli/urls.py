@@ -10,7 +10,7 @@ from .constants import DEFAULT_SWAIN_BASE_URL
 from .errors import CLIError
 
 
-def _normalize_base_url(value: Optional[str]) -> Optional[str]:
+def normalize_base_url(value: Optional[str]) -> Optional[str]:
     if not isinstance(value, str):
         return None
     normalized = value.strip()
@@ -45,8 +45,8 @@ def resolve_base_urls(
     - When only crudsql_base_url is provided, the Swain base falls back to the
       CrudSQL host with a trailing '/crud' stripped if present.
     """
-    normalized_swain = _normalize_base_url(swain_base_url)
-    normalized_crud = _normalize_base_url(crudsql_base_url)
+    normalized_swain = normalize_base_url(swain_base_url)
+    normalized_crud = normalize_base_url(crudsql_base_url)
 
     swain_base_candidate = normalized_swain or _strip_trailing_crud(normalized_crud or "")
     swain_base = _strip_trailing_crud(swain_base_candidate or DEFAULT_SWAIN_BASE_URL)
@@ -54,7 +54,7 @@ def resolve_base_urls(
     return swain_base, crudsql_base
 
 
-def _swain_url(
+def swain_url(
     base_url: str, path: str, *, enforce_api_prefix: bool = True
 ) -> httpx.URL:
     normalized_base = base_url.rstrip("/") + "/"
@@ -78,3 +78,7 @@ def crudsql_dynamic_swagger_url(base_url: str) -> str:
         )
     normalized_base = base_url.rstrip("/") + "/"
     return str(httpx.URL(normalized_base).join("api/dynamic_swagger"))
+
+
+_normalize_base_url = normalize_base_url
+_swain_url = swain_url

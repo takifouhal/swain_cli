@@ -110,7 +110,7 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 1. Create a virtual environment (`python -m venv .venv`) and activate it.
 2. Install the project with dev + lint extras: `pip install -e .[dev,lint]`.
 3. Run the CLI locally via `python -m swain_cli --help`, `python -m swain_cli.cli --help`, or the `swain_cli` entry point.
-4. Run checks: `ruff check .`, `python -m mypy swain_cli`, and `python -m pytest`.
+4. Run checks: `./scripts/check.sh` (macOS/Linux) or `powershell -File scripts/check.ps1` (Windows).
 
 ## Maintainers
 - Trigger the `build-jre` workflow (workflow dispatch) to build trimmed JRE archives for Linux (x86_64 + arm64), macOS (Intel + Apple Silicon), and Windows. Provide an optional `release_tag` to publish directly to a `jre-<version>` release.

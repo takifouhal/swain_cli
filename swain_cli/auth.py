@@ -18,18 +18,21 @@ from .console import log, log_error
 from .constants import (
     AUTH_TOKEN_ENV_VAR,
     DEFAULT_SWAIN_BASE_URL,
-    HTTP_TIMEOUT_SECONDS,
     KEYRING_REFRESH_USERNAME,
     KEYRING_SERVICE,
     KEYRING_USERNAME,
-    TENANT_HEADER_NAME,
     TENANT_ID_ENV_VAR,
 )
 from .errors import CLIError
+from .http import (
+    describe_http_error,
+    http_timeout,
+    normalize_tenant_id,
+    request_headers,
+)
 from .prompts import prompt_confirm, prompt_password, prompt_select, prompt_text
-from .urls import _swain_url
-from .utils import _pick, _safe_str
-from .version import USER_AGENT
+from .urls import swain_url
+from .utils import pick, safe_str
 
 
 @dataclass
@@ -103,15 +106,6 @@ def require_auth_token(purpose: str = "perform this action") -> str:
     return token
 
 
-def _normalize_tenant_id(value: Optional[Union[str, int]]) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        normalized = value.strip()
-        return normalized or None
-    return str(value)
-
-
 def _decode_jwt_payload(token: str) -> Dict[str, Any]:
     try:
         parts = token.split(".")
@@ -136,7 +130,7 @@ def _extract_tenant_ids_from_token(token: str) -> List[str]:
     seen: set[str] = set()
 
     def add(value: Any) -> None:
-        normalized = _normalize_tenant_id(value)
+        normalized = normalize_tenant_id(value)
         if normalized and normalized not in seen:
             seen.add(normalized)
             candidates.append(normalized)
@@ -165,31 +159,22 @@ def _extract_tenant_ids_from_token(token: str) -> List[str]:
     return candidates
 
 
-def _swain_request_headers(
+def swain_request_headers(
     token: str, *, tenant_id: Optional[Union[str, int]] = None
 ) -> Dict[str, str]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": USER_AGENT,
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    normalized_tenant = _normalize_tenant_id(tenant_id)
-    if normalized_tenant:
-        headers[TENANT_HEADER_NAME] = normalized_tenant
-    return headers
+    return request_headers(token, tenant_id=tenant_id)
 
 
 def _fetch_account_name_for_tenant(
     base_url: str, token: str, tenant_id: Union[str, int]
 ) -> Optional[str]:
-    normalized = _normalize_tenant_id(tenant_id)
+    normalized = normalize_tenant_id(tenant_id)
     if not normalized:
         return None
 
-    url = _swain_url(base_url, f"Account/{normalized}")
-    headers = _swain_request_headers(token, tenant_id=normalized)
-    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    url = swain_url(base_url, f"Account/{normalized}")
+    headers = request_headers(token, tenant_id=normalized)
+    timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         try:
             response = client.get(url, headers=headers)
@@ -207,12 +192,12 @@ def _fetch_account_name_for_tenant(
         return None
 
     if isinstance(payload, dict):
-        name = _safe_str(_pick(payload, "name"))
+        name = safe_str(pick(payload, "name"))
         if name:
             return name
         data_section = payload.get("data")
         if isinstance(data_section, dict):
-            name = _safe_str(_pick(data_section, "name"))
+            name = safe_str(pick(data_section, "name"))
             if name:
                 return name
     return None
@@ -225,11 +210,11 @@ def determine_swain_tenant_id(
     *,
     allow_prompt: bool,
 ) -> str:
-    explicit = _normalize_tenant_id(provided)
+    explicit = normalize_tenant_id(provided)
     if explicit:
         return explicit
 
-    env_value = _normalize_tenant_id(os.environ.get(TENANT_ID_ENV_VAR))
+    env_value = normalize_tenant_id(os.environ.get(TENANT_ID_ENV_VAR))
     if env_value:
         log(f"using tenant id {env_value} from {TENANT_ID_ENV_VAR}")
         return env_value
@@ -277,44 +262,22 @@ def swain_login_with_credentials(base_url: str, username: str, password: str) ->
         raise CLIError("username is required for credential login")
     if not password:
         raise CLIError("password is required for credential login")
-    login_url = _swain_url(base_url, "auth/login", enforce_api_prefix=False)
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-    }
+    login_url = swain_url(base_url, "auth/login", enforce_api_prefix=False)
+    headers = request_headers(content_type="application/json")
     payload = {"username": username, "password": password}
-    timeout = httpx.Timeout(HTTP_TIMEOUT_SECONDS, connect=HTTP_TIMEOUT_SECONDS)
+    timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         try:
             response = client.post(login_url, headers=headers, json=payload)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            detail = ""
-            if isinstance(exc, httpx.HTTPStatusError):
-                status = exc.response.status_code
-                reason = exc.response.reason_phrase
-                detail = f"{status} {reason}".strip()
-                body = exc.response.text.strip()
-                if body:
-                    try:
-                        data = exc.response.json()
-                        error_msg = _safe_str(
-                            data.get("detail") if isinstance(data, dict) else None
-                        )
-                        if error_msg:
-                            detail = f"{detail}: {error_msg}" if detail else error_msg
-                    except json.JSONDecodeError:
-                        first_line = body.splitlines()[0]
-                        detail = f"{detail}: {first_line}" if detail else first_line
-            if not detail:
-                detail = str(exc)
+            detail = describe_http_error(exc)
             raise CLIError(f"credential login failed: {detail}") from exc
     try:
         data = response.json()
     except json.JSONDecodeError as exc:
         raise CLIError("login response was not valid JSON") from exc
-    token = _safe_str(data.get("token"))
+    token = safe_str(data.get("token"))
     if not token:
         raise CLIError("login response did not include an access token")
     return data
@@ -331,11 +294,11 @@ def read_login_token(args: SimpleNamespace) -> str:
         password = prompt_password("Password")
 
     login_payload = swain_login_with_credentials(auth_base, username, password)
-    token_value = _safe_str(login_payload.get("token"))
+    token_value = safe_str(login_payload.get("token"))
     if not token_value:
         raise CLIError("credential login did not return an access token")
 
-    refresh_value = _safe_str(
+    refresh_value = safe_str(
         login_payload.get("refresh_token")
         or login_payload.get("refreshToken")
         or login_payload.get("refresh-token")
@@ -343,6 +306,10 @@ def read_login_token(args: SimpleNamespace) -> str:
     setattr(args, "login_response", login_payload)
     setattr(args, "login_refresh_token", refresh_value)
     return token_value
+
+
+_normalize_tenant_id = normalize_tenant_id
+_swain_request_headers = swain_request_headers
 
 
 def interactive_auth_setup(auth_base_url: Optional[str] = None) -> None:
