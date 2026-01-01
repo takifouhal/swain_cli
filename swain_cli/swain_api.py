@@ -108,7 +108,7 @@ def fetch_swain_projects(
     return projects
 
 
-def _fetch_swain_projects_with_fallback(
+def fetch_swain_projects_with_fallback(
     primary_base: str,
     fallback_base: Optional[str],
     token: str,
@@ -260,7 +260,7 @@ def fetch_swain_connections(
     return connections
 
 
-def _fetch_swain_connections_with_fallback(
+def fetch_swain_connections_with_fallback(
     primary_base: str,
     fallback_base: Optional[str],
     token: str,
@@ -293,6 +293,10 @@ def _fetch_swain_connections_with_fallback(
         connection_id=connection_id,
         page_size=page_size,
     )
+
+
+_fetch_swain_projects_with_fallback = fetch_swain_projects_with_fallback
+_fetch_swain_connections_with_fallback = fetch_swain_connections_with_fallback
 
 
 def fetch_swain_connection_by_id(

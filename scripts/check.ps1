@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "==> ruff"
-python -m ruff check .
+ruff check .
 
 Write-Host "==> mypy"
 python -m mypy swain_cli

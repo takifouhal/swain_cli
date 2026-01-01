@@ -14,7 +14,16 @@ install_hint="${python_bin} -m pip install -e '.[dev,lint]'"
 
 python_version="$("${python_bin}" -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)')"
 
-for module in ruff mypy pytest; do
+if ! command -v ruff >/dev/null 2>&1; then
+  note=""
+  if [[ "${python_version}" -lt 309 ]]; then
+    note=" (note: the lint toolchain requires Python 3.9+)"
+  fi
+  echo "ruff not found${note}; install dev deps with: ${install_hint}" >&2
+  exit 1
+fi
+
+for module in mypy pytest; do
   if ! "${python_bin}" -c "import ${module}" >/dev/null 2>&1; then
     note=""
     if [[ "${python_version}" -lt 309 && "${module}" != "pytest" ]]; then
@@ -26,7 +35,7 @@ for module in ruff mypy pytest; do
 done
 
 echo "==> ruff"
-"${python_bin}" -m ruff check .
+ruff check .
 
 echo "==> mypy"
 "${python_bin}" -m mypy swain_cli

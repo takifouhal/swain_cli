@@ -53,6 +53,8 @@ Pushing the tag triggers `release.yml` automatically.
      - `swain_cli-macos-x86_64`
      - `swain_cli-macos-arm64`
      - `swain_cli-windows-x86_64.exe`
+     Each binary also ships with a matching `.sha256` file (e.g. `swain_cli-linux-x86_64.sha256`).
+  4. `release-assets` also uploads the installer scripts as `install.sh` and `install.ps1` (defaults to installing the tagged version).
 - **`ci.yml`** runs on every push/PR; double-check the latest run before cutting the tag.
 
 ### 6. Configure Trusted Publishing (one-time)
@@ -81,8 +83,8 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached.
 3. Optionally download an archive (e.g. `swain_cli-jre-linux-x86_64.tar.gz`) and verify the checksum locally.
 4. Install the freshly published package in a clean environment either as a binary (no Python):
-   - macOS/Linux: `curl -fsSL https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.sh | bash`
-   - Windows (PowerShell): `iwr -useb https://raw.githubusercontent.com/takifouhal/swain_cli/HEAD/scripts/install.ps1 | iex`
+   - macOS/Linux: `curl -fsSL https://github.com/takifouhal/swain_cli/releases/latest/download/install.sh | bash`
+   - Windows (PowerShell): `iwr -useb https://github.com/takifouhal/swain_cli/releases/latest/download/install.ps1 | iex`
    Or via Python: `pipx install swain_cli`.
    Then run `swain_cli doctor` and `swain_cli list-generators`.
 5. Update `CHANGELOG.md` (or your release notes) with the final status.

@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 import pytest
 from typer.testing import CliRunner
 
+import swain_cli
 import swain_cli.cli as cli
 import swain_cli.constants as constants
 import swain_cli.swain_api as swain_api
@@ -15,6 +16,12 @@ def test_cli_help_invocation():
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0
     assert "Usage:" in result.stdout
+
+
+def test_cli_version_flag():
+    result = runner.invoke(cli.app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"swain_cli {swain_cli.__version__}"
 
 
 def test_cli_without_command_shows_help():

@@ -18,8 +18,8 @@ from .prompts import InteractionAborted
 from .swain_api import (
     SwainConnection,
     SwainProject,
-    _fetch_swain_connections_with_fallback,
-    _fetch_swain_projects_with_fallback,
+    fetch_swain_connections_with_fallback,
+    fetch_swain_projects_with_fallback,
     swain_dynamic_swagger_from_connection,
 )
 from .urls import normalize_base_url, resolve_base_urls
@@ -143,7 +143,7 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
             tenant_id,
             allow_prompt=True,
         )
-        projects = _fetch_swain_projects_with_fallback(
+        projects = fetch_swain_projects_with_fallback(
             swain_base,
             crudsql_base if crudsql_base != swain_base else None,
             token,
@@ -168,7 +168,7 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
             )
             swain_project = project_options[selected_project_id]
 
-        connections = _fetch_swain_connections_with_fallback(
+        connections = fetch_swain_connections_with_fallback(
             swain_base,
             crudsql_base if crudsql_base != swain_base else None,
             token,

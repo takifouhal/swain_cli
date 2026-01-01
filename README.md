@@ -26,6 +26,7 @@ The single-file binary bundles a Python runtime, so no system Python is needed. 
 Notes:
 - Linux arm64 is supported (built via emulated runner).
 - Windows on ARM uses the x86_64 binary and runs under emulation.
+- Installers verify SHA-256 checksums when available; set `SWAIN_CLI_INSTALL_REQUIRE_CHECKSUM=1` to require them.
 
 ### Homebrew (macOS + Linux)
 We publish the same single-file binaries through a lightweight tap so you can manage upgrades via Homebrew.

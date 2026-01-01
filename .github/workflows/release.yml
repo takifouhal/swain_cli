@@ -80,12 +80,35 @@ jobs:
           esac
           mv "$BINARY" "dist/swain_cli-${os}-${arch}"
         shell: bash
+      - name: Generate checksum (Unix)
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          set -euo pipefail
+          for binary in dist/swain_cli-*; do
+            if [[ "${binary}" == *.sha256 ]]; then
+              continue
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "${binary}" > "${binary}.sha256"
+            else
+              shasum -a 256 "${binary}" > "${binary}.sha256"
+            fi
+          done
+        shell: bash
       - name: Rename binary with OS/arch suffix (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
           $binary = "dist\swain_cli.exe"
           if (-Not (Test-Path $binary)) { throw "Binary not found: $binary" }
           Move-Item $binary "dist\swain_cli-windows-x86_64.exe" -Force
+        shell: pwsh
+      - name: Generate checksum (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          $binary = "dist\swain_cli-windows-x86_64.exe"
+          if (-Not (Test-Path $binary)) { throw "Binary not found: $binary" }
+          $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLower()
+          "$hash  swain_cli-windows-x86_64.exe" | Out-File "$binary.sha256" -Encoding ascii
         shell: pwsh
 
       - name: Build Linux arm64 binary (emulated)
@@ -105,6 +128,7 @@ jobs:
             python3 -m pip install pyinstaller
             pyinstaller -n swain_cli --onefile -m swain_cli.cli
             mv dist/swain_cli dist/swain_cli-linux-arm64
+            sha256sum dist/swain_cli-linux-arm64 > dist/swain_cli-linux-arm64.sha256
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
@@ -119,10 +143,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+
+      - name: Bundle installer scripts
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-latest}"
+          if [[ -z "${tag}" ]]; then
+            tag="latest"
+          fi
+          sed "s/^DEFAULT_VERSION=\\\"latest\\\"$/DEFAULT_VERSION=\\\"${tag}\\\"/" scripts/install.sh > dist/install.sh
+          sed "s/^\\$DefaultVersion = 'latest'$/\\$DefaultVersion = '${tag}'/" scripts/install.ps1 > dist/install.ps1
+          chmod +x dist/install.sh
 
       - name: List downloaded assets
         run: ls -R dist

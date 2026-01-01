@@ -52,6 +52,7 @@ from .prompts import prompt_confirm, prompt_select, prompt_text
 from .urls import (
     crudsql_dynamic_swagger_url,
 )
+from .version import cli_version
 
 app = typer.Typer(help="swain_cli CLI")
 auth_app = typer.Typer(help="Authentication helpers")
@@ -116,12 +117,22 @@ def handle_interactive(args: SimpleNamespace) -> int:
 @app.callback(invoke_without_command=True)
 def cli_callback(
     ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="print swain_cli version and exit",
+        is_eager=True,
+    ),
     generator_version: Optional[str] = typer.Option(
         None,
         "--generator-version",
         help="override the OpenAPI Generator version to use (must be cached)",
     ),
 ) -> None:
+    if version:
+        typer.echo(f"swain_cli {cli_version()}")
+        raise typer.Exit(code=0)
     ctx.obj = CLIContext(generator_version=generator_version)
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())

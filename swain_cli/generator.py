@@ -26,9 +26,9 @@ from .engine import (
 from .errors import CLIError
 from .swain_api import (
     SwainConnection,
-    _fetch_swain_connections_with_fallback,
     fetch_swain_connection_by_id,
     fetch_swain_connection_schema,
+    fetch_swain_connections_with_fallback,
 )
 from .urls import resolve_base_urls
 from .utils import format_cli_command, is_url, pick, safe_int
@@ -237,7 +237,7 @@ def handle_gen(args: GenArgs) -> int:
                         ):
                             log("warning: connection project does not match provided project id")
                 elif project_id_value is not None:
-                    connections = _fetch_swain_connections_with_fallback(
+                    connections = fetch_swain_connections_with_fallback(
                         swain_base,
                         crudsql_base if crudsql_base != swain_base else None,
                         token,
