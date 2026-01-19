@@ -251,7 +251,15 @@ jobs:
             tag="latest"
           fi
           sed "s/^DEFAULT_VERSION=\\\"latest\\\"$/DEFAULT_VERSION=\\\"${tag}\\\"/" scripts/install.sh > dist/install.sh
-          sed "s/^\\$DefaultVersion = 'latest'$/\\$DefaultVersion = '${tag}'/" scripts/install.ps1 > dist/install.ps1
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          tag = (os.environ.get("RELEASE_TAG") or "latest").strip() or "latest"
+          src = Path("scripts/install.ps1").read_text(encoding="utf-8")
+          src = src.replace("$DefaultVersion = 'latest'", f"$DefaultVersion = '{tag}'")
+          Path("dist/install.ps1").write_text(src, encoding="utf-8")
+          PY
           chmod +x dist/install.sh
 
       - name: List downloaded assets
