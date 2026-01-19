@@ -154,7 +154,7 @@ jobs:
           python -m pip install pyinstaller
       - name: Build executable
         run: |
-          pyinstaller -n swain_cli --onefile -m swain_cli.cli
+          pyinstaller -n swain_cli --onefile swain_cli/cli.py
         shell: bash
       - name: Rename binary with OS/arch suffix (Unix)
         if: ${{ matrix.os != 'windows-latest' }}
@@ -218,7 +218,7 @@ jobs:
             python3 -m pip install --upgrade pip
             python3 -m pip install .
             python3 -m pip install pyinstaller
-            pyinstaller -n swain_cli --onefile -m swain_cli.cli
+            pyinstaller -n swain_cli --onefile swain_cli/cli.py
             mv dist/swain_cli dist/swain_cli-linux-arm64
             sha256sum dist/swain_cli-linux-arm64 > dist/swain_cli-linux-arm64.sha256
 
