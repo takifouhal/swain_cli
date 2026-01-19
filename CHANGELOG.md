@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.11
+- Fix Swain connection swagger downloads by targeting `GET /api/connections/:id/dynamic-swagger` (with a fallback to the legacy underscore route).
+
 ## v0.3.10
 - Refresh macOS arm64 embedded JRE SHA-256 to match released asset; fixes hash mismatch on first-run download.
 

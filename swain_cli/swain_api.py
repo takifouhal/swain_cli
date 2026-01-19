@@ -333,24 +333,47 @@ def fetch_swain_connection_schema(
 ) -> Path:
     # Use the backend proxy so it can mint a per-connection preview JWT and
     # authenticate against the remote CrudSQL instance on our behalf.
-    schema_url = swain_url(
-        base_url,
+    candidate_paths = [
+        # Current route (matches Swain backend: GET /api/connections/:id/dynamic-swagger)
+        f"connections/{connection.id}/dynamic-swagger",
+        # Legacy route (older deployments used an underscore)
         f"connections/{connection.id}/dynamic_swagger",
-    )
-    log(
-        f"fetching connection dynamic swagger from {schema_url} (connection {connection.id})"
-    )
+    ]
     headers = request_headers(token, tenant_id=tenant_id)
     timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        try:
-            response = client.get(schema_url, headers=headers)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            detail = describe_http_error(exc)
-            raise CLIError(
-                f"failed to fetch connection swagger for {connection.id}: {detail}"
-            ) from exc
+        response: Optional[httpx.Response] = None
+        for idx, path in enumerate(candidate_paths):
+            schema_url = swain_url(base_url, path)
+            if idx == 0:
+                log(
+                    "fetching connection dynamic swagger from"
+                    f" {schema_url} (connection {connection.id})"
+                )
+            else:
+                log(
+                    "connection swagger endpoint returned 404;"
+                    f" retrying with legacy route: {schema_url}"
+                )
+            try:
+                response = client.get(schema_url, headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404 and idx + 1 < len(candidate_paths):
+                    continue
+                detail = describe_http_error(exc)
+                raise CLIError(
+                    f"failed to fetch connection swagger for {connection.id}: {detail}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                detail = describe_http_error(exc)
+                raise CLIError(
+                    f"failed to fetch connection swagger for {connection.id}: {detail}"
+                ) from exc
+            break
+
+    if response is None:
+        raise CLIError(f"failed to fetch connection swagger for {connection.id}")
     if not response.content or not response.content.strip():
         raise CLIError("connection dynamic swagger response was empty")
     return write_bytes_to_tempfile(
