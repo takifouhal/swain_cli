@@ -14,7 +14,7 @@ on:
 jobs:
   build-jres:
     name: Build bundled JREs
-    uses: ./.github/workflows/build-jre.yml
+    uses: takifouhal/swain_cli/.github/workflows/build-jre.yml@main
     with:
       release_tag: ''
 
