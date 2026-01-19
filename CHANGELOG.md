@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.12
+- Prefer downloading per-connection swagger directly from the connection build endpoint, falling back to the Swain proxy when direct fetch fails (avoids truncated proxy responses).
+
 ## v0.3.11
 - Fix Swain connection swagger downloads by targeting `GET /api/connections/:id/dynamic-swagger` (with a fallback to the legacy underscore route).
 
