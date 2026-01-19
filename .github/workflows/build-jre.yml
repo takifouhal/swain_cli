@@ -48,13 +48,15 @@ jobs:
         include:
           - label: linux-x86_64
             runner: ubuntu-latest
+            build_mode: native
             temurin_os: linux
             temurin_arch: x64
             archive_ext: tar.gz
             script: scripts/build-jre-linux.sh
             output: swain_cli-jre-linux-x86_64.tar.gz
           - label: linux-arm64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-latest
+            build_mode: run-on-arch
             temurin_os: linux
             temurin_arch: aarch64
             archive_ext: tar.gz
@@ -62,6 +64,7 @@ jobs:
             output: swain_cli-jre-linux-arm64.tar.gz
           - label: macos-x86_64
             runner: macos-15
+            build_mode: native
             temurin_os: mac
             temurin_arch: x64
             archive_ext: tar.gz
@@ -69,6 +72,7 @@ jobs:
             output: swain_cli-jre-macos-x86_64.tar.gz
           - label: macos-arm64
             runner: macos-14
+            build_mode: native
             temurin_os: mac
             temurin_arch: aarch64
             archive_ext: tar.gz
@@ -76,6 +80,7 @@ jobs:
             output: swain_cli-jre-macos-arm64.tar.gz
           - label: windows-x86_64
             runner: windows-latest
+            build_mode: native
             temurin_os: windows
             temurin_arch: x64
             archive_ext: zip
@@ -93,11 +98,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download Temurin JDK
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.build_mode != 'run-on-arch'
         shell: bash
         run: |
           set -euo pipefail
           curl -L --fail "$DOWNLOAD_URL" -o "$ARCHIVE_FILENAME"
+
+      - name: Build trimmed JRE (Linux arm64 emulated)
+        if: matrix.build_mode == 'run-on-arch'
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update
+            apt-get install -y curl tar binutils
+          run: |
+            set -euo pipefail
+            curl -L --fail "$DOWNLOAD_URL" -o "$ARCHIVE_FILENAME"
+            bash "${{ matrix.script }}" "$ARCHIVE_FILENAME" "$OUTPUT_NAME"
 
       - name: Download Temurin JDK (Windows)
         if: runner.os == 'Windows'
@@ -106,7 +126,7 @@ jobs:
           Invoke-WebRequest -Uri $env:DOWNLOAD_URL -OutFile $env:ARCHIVE_FILENAME
 
       - name: Build trimmed JRE (non-Windows)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.build_mode != 'run-on-arch'
         shell: bash
         run: |
           set -euo pipefail
