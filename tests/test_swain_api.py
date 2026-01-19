@@ -282,3 +282,91 @@ def test_fetch_swain_connection_schema_falls_back_to_legacy_route_on_404(
         assert schema.exists()
     finally:
         schema.unlink(missing_ok=True)
+
+
+def test_fetch_swain_connection_schema_prefers_direct_dynamic_swagger_url(
+    monkeypatch, fake_client, fake_response
+):
+    connection = swain_api.SwainConnection(
+        id=2,
+        database_name=None,
+        driver=None,
+        stage=None,
+        project_name=None,
+        schema_name=None,
+        build_id=7,
+        build_endpoint="https://build.example.com",
+        connection_endpoint=None,
+        raw={"id": 2},
+    )
+    response = fake_response(
+        "https://build.example.com/api/dynamic_swagger",
+        content=b'{"openapi":"3.0.0"}',
+    )
+    calls: List[Any] = []
+
+    def fake_http_client(**kwargs):
+        return fake_client([response], calls)
+
+    monkeypatch.setattr(swain_api.httpx, "Client", fake_http_client)
+    schema = swain_api.fetch_swain_connection_schema(
+        "https://api.example.com",
+        connection,
+        "token",
+        tenant_id="999",
+    )
+    try:
+        assert calls[0][1] == "https://build.example.com/api/dynamic_swagger"
+        assert "Authorization" not in calls[0][2]
+        assert schema.exists()
+    finally:
+        schema.unlink(missing_ok=True)
+
+
+def test_fetch_swain_connection_schema_falls_back_to_proxy_when_direct_fails(
+    monkeypatch, fake_client, fake_response
+):
+    connection = swain_api.SwainConnection(
+        id=2,
+        database_name=None,
+        driver=None,
+        stage=None,
+        project_name=None,
+        schema_name=None,
+        build_id=7,
+        build_endpoint="https://build.example.com",
+        connection_endpoint=None,
+        raw={"id": 2},
+    )
+    direct = fake_response(
+        "https://build.example.com/api/dynamic_swagger",
+        status_code=401,
+        content=b"denied",
+        reason="Unauthorized",
+    )
+    proxy = fake_response(
+        "https://api.example.com/api/connections/2/dynamic-swagger",
+        content=b'{"openapi":"3.0.0"}',
+    )
+    calls: List[Any] = []
+
+    def fake_http_client(**kwargs):
+        return fake_client([direct, proxy], calls)
+
+    monkeypatch.setattr(swain_api.httpx, "Client", fake_http_client)
+    schema = swain_api.fetch_swain_connection_schema(
+        "https://api.example.com",
+        connection,
+        "token",
+        tenant_id="999",
+    )
+    try:
+        assert [entry[1] for entry in calls] == [
+            "https://build.example.com/api/dynamic_swagger",
+            "https://api.example.com/api/connections/2/dynamic-swagger",
+        ]
+        assert calls[1][2]["Authorization"] == "Bearer token"
+        assert calls[1][2]["X-Tenant-ID"] == "999"
+        assert schema.exists()
+    finally:
+        schema.unlink(missing_ok=True)

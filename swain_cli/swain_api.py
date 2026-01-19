@@ -331,18 +331,49 @@ def fetch_swain_connection_schema(
     *,
     tenant_id: Optional[Union[str, int]] = None,
 ) -> Path:
-    # Use the backend proxy so it can mint a per-connection preview JWT and
-    # authenticate against the remote CrudSQL instance on our behalf.
+    # Prefer fetching the swagger directly from the connection endpoint (when
+    # available). If that fails, fall back to the backend proxy so it can mint a
+    # per-connection preview JWT and authenticate against the remote CrudSQL
+    # instance on our behalf.
+    direct_url: Optional[str] = None
+    try:
+        direct_url = swain_dynamic_swagger_from_connection(connection)
+    except CLIError:
+        direct_url = None
+
     candidate_paths = [
         # Current route (matches Swain backend: GET /api/connections/:id/dynamic-swagger)
         f"connections/{connection.id}/dynamic-swagger",
         # Legacy route (older deployments used an underscore)
         f"connections/{connection.id}/dynamic_swagger",
     ]
-    headers = request_headers(token, tenant_id=tenant_id)
     timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         response: Optional[httpx.Response] = None
+
+        if direct_url:
+            try:
+                log(
+                    "fetching connection dynamic swagger directly from"
+                    f" {direct_url} (connection {connection.id})"
+                )
+                response = client.get(direct_url, headers=request_headers())
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                log(
+                    "direct connection swagger fetch failed;"
+                    f" falling back to Swain proxy: {describe_http_error(exc)}"
+                )
+                response = None
+            else:
+                if response.content and response.content.strip():
+                    return write_bytes_to_tempfile(
+                        response.content,
+                        suffix=".json",
+                        description=f"connection swagger for {connection.id}",
+                    )
+
+        headers = request_headers(token, tenant_id=tenant_id)
         for idx, path in enumerate(candidate_paths):
             schema_url = swain_url(base_url, path)
             if idx == 0:
