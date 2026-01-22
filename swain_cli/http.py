@@ -68,8 +68,37 @@ def describe_http_error(exc: httpx.HTTPError) -> str:
             if suffix:
                 detail = f"{detail}: {suffix}" if detail else suffix
         return detail
-    detail = str(exc).strip()
-    return detail or str(exc)
+
+    request = getattr(exc, "request", None)
+    target = ""
+    if request is not None:
+        method = getattr(request, "method", "") or ""
+        url = getattr(request, "url", None)
+        url_str = str(url) if url is not None else ""
+        target = f"{method} {url_str}".strip()
+
+    message = str(exc).strip()
+    summary = message or exc.__class__.__name__
+    if isinstance(exc, httpx.TimeoutException):
+        summary = "request timed out"
+        if message and "timed out" not in message.lower():
+            summary = f"{summary}: {message}"
+    elif isinstance(exc, httpx.ConnectError):
+        summary = "failed to connect"
+        if message and "connect" not in message.lower():
+            summary = f"{summary}: {message}"
+    elif isinstance(exc, httpx.ProxyError):
+        summary = "proxy error"
+        if message and "proxy" not in message.lower():
+            summary = f"{summary}: {message}"
+    elif isinstance(exc, httpx.RequestError):
+        summary = "network error"
+        if message and "network" not in message.lower():
+            summary = f"{summary}: {message}"
+
+    if target and target not in summary:
+        summary = f"{summary} ({target})"
+    return summary
 
 
 def caused_by_status(exc: BaseException, status_code: int) -> bool:

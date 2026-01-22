@@ -1,6 +1,8 @@
 import platform
 import re
+from types import SimpleNamespace
 
+import httpx
 import pytest
 
 import swain_cli.constants as constants
@@ -166,3 +168,126 @@ def test_parse_checksum_file_variants(tmp_path):
     )
     assert engine.parse_checksum_file(p4) == digest
 
+
+def test_httpx_downloader_retries_request_errors(tmp_path):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, content=b"ok", request=request)
+
+    transport = httpx.MockTransport(handler)
+
+    sleeps = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    downloader = engine.HTTPXDownloader(
+        timeout=0.1,
+        max_attempts=3,
+        backoff_initial=0.01,
+        backoff_max=0.01,
+        sleep=fake_sleep,
+        client_factory=lambda timeout: httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            transport=transport,
+        ),
+    )
+
+    output = tmp_path / "out.bin"
+    downloader(
+        "https://example.com/out.bin",
+        str(output),
+        SimpleNamespace(),
+        progressbar=False,
+    )
+    assert output.read_bytes() == b"ok"
+    assert calls["count"] == 2
+    assert sleeps == [0.01]
+
+
+def test_httpx_downloader_respects_retry_after(tmp_path):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(
+                503,
+                headers={"Retry-After": "2"},
+                content=b"service unavailable",
+                request=request,
+            )
+        return httpx.Response(200, content=b"ok", request=request)
+
+    transport = httpx.MockTransport(handler)
+
+    sleeps = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    downloader = engine.HTTPXDownloader(
+        timeout=0.1,
+        max_attempts=2,
+        backoff_initial=0.01,
+        backoff_max=10.0,
+        sleep=fake_sleep,
+        client_factory=lambda timeout: httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            transport=transport,
+        ),
+    )
+
+    output = tmp_path / "out.bin"
+    downloader(
+        "https://example.com/out.bin",
+        str(output),
+        SimpleNamespace(),
+        progressbar=False,
+    )
+    assert output.read_bytes() == b"ok"
+    assert calls["count"] == 2
+    assert sleeps == [2.0]
+
+
+def test_httpx_downloader_does_not_retry_404(tmp_path):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(404, content=b"nope", request=request)
+
+    transport = httpx.MockTransport(handler)
+    downloader = engine.HTTPXDownloader(
+        timeout=0.1,
+        max_attempts=5,
+        backoff_initial=0.0,
+        backoff_max=0.0,
+        sleep=lambda *_: None,
+        client_factory=lambda timeout: httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            transport=transport,
+        ),
+    )
+
+    output = tmp_path / "out.bin"
+    with pytest.raises(CLIError) as excinfo:
+        downloader(
+            "https://example.com/out.bin",
+            str(output),
+            SimpleNamespace(),
+            progressbar=False,
+        )
+
+    assert calls["count"] == 1
+    message = str(excinfo.value)
+    assert "after 1 attempt(s)" in message
+    assert "404" in message
+    assert "Hint:" in message
