@@ -24,6 +24,7 @@ from .engine import (
     run_openapi_generator,
 )
 from .errors import CLIError
+from .openapi_spec import inject_base_url
 from .swain_api import (
     SwainConnection,
     fetch_swain_connection_by_id,
@@ -281,6 +282,13 @@ def handle_gen(args: GenArgs) -> int:
         resolved_schema = resolve_schema_for_generation(args, swain_base, crudsql_base)
         schema = resolved_schema.schema
         temp_schema = resolved_schema.temp_path
+        if temp_schema:
+            base_url = crudsql_base
+            if resolved_schema.connection and resolved_schema.connection.effective_endpoint:
+                base_url = resolved_schema.connection.effective_endpoint
+            patched = inject_base_url(temp_schema, base_url)
+            if patched:
+                log(f"patched schema server URL to {patched}")
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
         languages = args.languages

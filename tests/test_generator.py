@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import swain_cli.constants as constants
@@ -48,7 +50,9 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
         assert url == "https://api.example.com"
         assert token == "token-abc"
         assert tenant_id == "101"
-        schema_file.write_text("{}")
+        schema_file.write_text(
+            '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}'
+        )
         return schema_file
 
     captured = {}
@@ -56,6 +60,11 @@ def test_handle_gen_with_crudsql(monkeypatch, tmp_path):
     def fake_run(jar, engine, cmd, java_opts):
         captured["cmd"] = cmd
         captured["java_opts"] = java_opts
+        schema_path = cmd[cmd.index("-i") + 1]
+        spec = json.loads(Path(schema_path).read_text())
+        assert spec["host"] == "api.example.com"
+        assert spec["schemes"] == ["https"]
+        assert spec["basePath"] == "/api"
         return 0, ""
 
     monkeypatch.setattr(generator, "fetch_crudsql_schema", fake_fetch)
@@ -100,7 +109,9 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
 
     def fake_fetch(base, token, tenant_id=None):
         captured["crud_base"] = base
-        schema_file.write_text("{}")
+        schema_file.write_text(
+            '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}'
+        )
         return schema_file
 
     def fake_determine(base, token, provided, *, allow_prompt):
@@ -111,11 +122,16 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "determine_swain_tenant_id", fake_determine)
     monkeypatch.setattr(generator, "require_auth_token", lambda purpose="": "token-abc")
     monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
-    monkeypatch.setattr(
-        generator,
-        "run_openapi_generator",
-        lambda jar, engine, cmd, java_opts: (0, ""),
-    )
+
+    def fake_run(jar, engine, cmd, java_opts):
+        schema_path = cmd[cmd.index("-i") + 1]
+        spec = json.loads(Path(schema_path).read_text())
+        assert spec["host"] == "api.example.com"
+        assert spec["schemes"] == ["https"]
+        assert spec["basePath"] == "/crud/api"
+        return 0, ""
+
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
 
     args = GenArgs(
         generator_version=None,
@@ -153,7 +169,9 @@ def test_handle_gen_defaults_to_swain(monkeypatch, tmp_path):
         assert url == constants.DEFAULT_CRUDSQL_API_BASE_URL
         assert token == "token-default"
         assert tenant_id == "202"
-        schema_file.write_text("{}")
+        schema_file.write_text(
+            '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}'
+        )
         return schema_file
 
     monkeypatch.setattr(generator, "fetch_crudsql_schema", fake_fetch)
@@ -212,7 +230,9 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
         assert conn.id == connection.id
         assert token == "token-swain"
         assert tenant_id == "303"
-        schema_file.write_text("{}")
+        schema_file.write_text(
+            '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}'
+        )
         return schema_file
 
     captured: Dict[str, Any] = {}
@@ -220,6 +240,10 @@ def test_handle_gen_with_swain_connection(monkeypatch, tmp_path):
     def fake_run(jar, engine, cmd, java_opts):
         captured["cmd"] = cmd
         captured["java_opts"] = java_opts
+        schema_path = cmd[cmd.index("-i") + 1]
+        spec = json.loads(Path(schema_path).read_text())
+        assert spec["host"] == "build.example.com"
+        assert spec["schemes"] == ["https"]
         return 0, ""
 
     monkeypatch.setenv(constants.TENANT_ID_ENV_VAR, "303")

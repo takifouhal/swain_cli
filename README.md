@@ -65,6 +65,7 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 ## Generating SDKs
 - `swain_cli gen` accepts every OpenAPI Generator flag you already know (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options.
 - By default the CLI talks to `https://api.swain.technology` for Swain discovery and downloads the CrudSQL dynamic swagger from `https://api.swain.technology/crud`. Override with `--swain-base-url` (platform) and/or `--crudsql-url` (CrudSQL), or point to a local spec via `-i/--schema`. Example local backend: `swain_cli interactive --swain-base-url http://localhost:8080` (infers CrudSQL as `http://localhost:8080/crud`).
+- When generating from a downloaded dynamic swagger, `swain_cli` patches the schema base URL (Swagger `host`/`schemes`/`basePath` or OpenAPI `servers`) so generated SDKs default to the same host/path you pointed the CLI at.
 - Swain project integration: provide `--swain-project-id` and `--swain-connection-id` to resolve the deployed connection swagger automatically after authenticating. The CLI will find the active build, fetch `/api/dynamic_swagger`, and feed it to the generator.
 - JVM tuning: runs start with `-Xms2g -Xmx10g -XX:+UseG1GC`. If the build still runs out of memory the CLI retries at `-Xmx14g`. Supply extra options with `--java-opt` (repeatable) or export `SWAIN_CLI_JAVA_OPTS`.
 - Docs/tests are disabled by default via `--global-property=apiDocs=false,apiTests=false,modelDocs=false,modelTests=false`; override with your own `--generator-arg` when you need them.
