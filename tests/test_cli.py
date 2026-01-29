@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -266,3 +267,161 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.crudsql_url is None
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]
     assert dynamic_bases == ["https://api.example.com/crud"]
+
+
+def test_cli_projects_outputs_json(monkeypatch):
+    project = swain_api.SwainProject(id=1, name="Alpha", description="demo", raw={})
+
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-123")
+
+    def fake_determine(base, token, provided, *, allow_prompt):
+        cli.log("tenant resolved")
+        return "7"
+
+    monkeypatch.setattr(cli, "determine_swain_tenant_id", fake_determine)
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_projects_with_fallback",
+        lambda *args, **kwargs: [project],
+    )
+
+    result = runner.invoke(cli.app, ["projects"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == [{"id": 1, "name": "Alpha", "description": "demo"}]
+    assert "tenant resolved" not in result.stdout
+
+
+def test_cli_connections_requires_project_or_connection_id():
+    result = runner.invoke(cli.app, ["connections"])
+    assert result.exit_code == constants.EXIT_CODE_USAGE
+
+
+def test_cli_connections_outputs_json(monkeypatch):
+    connection = swain_api.SwainConnection(
+        id=2,
+        database_name="main-db",
+        driver="postgres",
+        stage="prod",
+        project_name="Alpha",
+        schema_name="public",
+        build_id=10,
+        build_endpoint="https://build.example.com",
+        connection_endpoint="https://conn.example.com",
+        raw={"id": 2, "project_id": 1},
+    )
+
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
+    monkeypatch.setattr(
+        cli,
+        "determine_swain_tenant_id",
+        lambda base, token, provided, *, allow_prompt: "1",
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connections_with_fallback",
+        lambda *args, **kwargs: [connection],
+    )
+
+    result = runner.invoke(cli.app, ["connections", "--project-id", "1"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == [
+        {
+            "id": 2,
+            "database_name": "main-db",
+            "driver": "postgres",
+            "stage": "prod",
+            "project_name": "Alpha",
+            "schema_name": "public",
+            "build_id": 10,
+            "endpoint": "https://conn.example.com",
+        }
+    ]
+
+
+def test_cli_schema_outputs_schema_to_stdout_and_cleans_tempfile(monkeypatch, tmp_path):
+    temp_schema = tmp_path / "schema.json"
+    temp_schema.write_text('{"openapi":"3.0.0"}', encoding="utf-8")
+
+    connection = swain_api.SwainConnection(
+        id=9,
+        database_name=None,
+        driver=None,
+        stage=None,
+        project_name=None,
+        schema_name=None,
+        build_id=None,
+        build_endpoint=None,
+        connection_endpoint=None,
+        raw={"id": 9},
+    )
+
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
+    monkeypatch.setattr(
+        cli,
+        "determine_swain_tenant_id",
+        lambda base, token, provided, *, allow_prompt: "1",
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connection_by_id",
+        lambda *args, **kwargs: connection,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connection_schema",
+        lambda *args, **kwargs: temp_schema,
+    )
+
+    result = runner.invoke(cli.app, ["schema", "--connection-id", "9"])
+    assert result.exit_code == 0
+    assert result.stdout == '{"openapi":"3.0.0"}'
+    assert not temp_schema.exists()
+
+
+def test_cli_schema_writes_schema_to_file(monkeypatch, tmp_path):
+    temp_schema = tmp_path / "temp_schema.json"
+    temp_schema.write_text('{"openapi":"3.0.0"}', encoding="utf-8")
+
+    connection = swain_api.SwainConnection(
+        id=9,
+        database_name=None,
+        driver=None,
+        stage=None,
+        project_name=None,
+        schema_name=None,
+        build_id=None,
+        build_endpoint=None,
+        connection_endpoint=None,
+        raw={"id": 9},
+    )
+
+    out_path = tmp_path / "out" / "schema.json"
+
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "token-xyz")
+    monkeypatch.setattr(
+        cli,
+        "determine_swain_tenant_id",
+        lambda base, token, provided, *, allow_prompt: "1",
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connection_by_id",
+        lambda *args, **kwargs: connection,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_swain_connection_schema",
+        lambda *args, **kwargs: temp_schema,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["schema", "--connection-id", "9", "--out", str(out_path)],
+    )
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert out_path.exists()
+    assert out_path.read_text(encoding="utf-8") == '{"openapi":"3.0.0"}'
+    assert not temp_schema.exists()
