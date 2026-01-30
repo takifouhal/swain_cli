@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.13
+- Added Swain project and connection discovery commands.
+- Added JSON and TSV output formats.
+- Improved logging and updated documentation.
+
 ## v0.3.12
 - Prefer downloading per-connection swagger directly from the connection build endpoint, falling back to the Swain proxy when direct fetch fails (avoids truncated proxy responses).
 
