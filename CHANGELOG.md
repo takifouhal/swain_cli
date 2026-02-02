@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.14
+- Fix Windows keyring failures when storing large RBAC-expanded JWTs by falling back to chunked credential storage.
+
 ## v0.3.13
 - Added Swain project and connection discovery commands.
 - Added JSON and TSV output formats.
