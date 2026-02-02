@@ -152,3 +152,31 @@ def test_auth_status_prefers_env(monkeypatch, capfd):
     assert "env-token-value" not in out
     assert "effective token" in out
     assert err == ""
+
+
+def test_persist_auth_token_falls_back_to_chunked_storage(monkeypatch):
+    original_set_password = auth.keyring.set_password
+
+    def flaky_set_password(service: str, username: str, password: str) -> None:
+        # Simulate the Windows Credential Manager blob limit by rejecting large secrets.
+        if username in {constants.KEYRING_USERNAME, constants.KEYRING_REFRESH_USERNAME}:
+            if len(password) > 300:
+                raise OSError("credential blob too large")
+        original_set_password(service, username, password)
+
+    monkeypatch.setattr(auth.keyring, "set_password", flaky_set_password)
+
+    token = "x" * 1200
+    refresh = "r" * 1200
+    auth.persist_auth_token(token, refresh)
+
+    state = auth.load_auth_state()
+    assert state.access_token == token
+    assert state.refresh_token == refresh
+
+    # Ensure chunk entries are removed on logout.
+    auth.clear_auth_state()
+    chunk0 = auth.keyring.get_password(
+        constants.KEYRING_SERVICE, f"{constants.KEYRING_USERNAME}__chunk_0"
+    )
+    assert chunk0 is None
