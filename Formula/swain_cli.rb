@@ -6,21 +6,21 @@ class SwainCli < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-macos-arm64"
-      sha256 "d69bd7e223ad4599b151dc8b9f6910979bdc35f02daef7065c77c2835d93ecbd"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.15/swain_cli-macos-arm64"
+      sha256 "e16d4e7625c507b4eed8ff28f6311b3aa83d44299cc73867b5e6f7ccef873a6d"
     else
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-macos-x86_64"
-      sha256 "c3d78d824631640c3ff79460cd8e79324093da9b997eb1676673c973cdd52bab"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.15/swain_cli-macos-x86_64"
+      sha256 "d8ea156eade91bdd37738d524d679d03ca84eadcde1c4a83b76c3f484897e394"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-linux-arm64"
-      sha256 "083d10800794b9927dec75070c5c887af0fb1a4bf1640a32c109c96fdcf0af3a"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.15/swain_cli-linux-arm64"
+      sha256 "dddcc3d75be84cbcb62c95e8a8353dd3b0fb7a33a887210cd461b794a1ae37ec"
     else
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-linux-x86_64"
-      sha256 "851726966e5b804aac0c8132523d9246fab70fe02a01d406a12f92669830ec2c"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.15/swain_cli-linux-x86_64"
+      sha256 "920f3852b2e4b9b97fd30b1268f6cfbe62a1e949217e34a8fe8ed36d1f8c66be"
     end
   end
 
