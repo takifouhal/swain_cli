@@ -8,6 +8,9 @@
 - Launch the embedded OpenJDK 21 runtime automatically (or opt into your own `java`)
 - Keep dependencies light (Typer, httpx, questionary, platformdirs, keyring, pooch) so `pipx`, CI, and ephemeral environments stay happy
 - Inspect and manage the embedded engine with helper commands (`engine`, `doctor`, `list-generators`)
+- Preview what will happen before you run it (`gen --dry-run`, `gen --plan-only` with text/JSON output)
+- Persist defaults in a TOML config file and reuse named generation profiles (`config`, `profiles`, `gen --profile`)
+- Opt into schema caching and post-generation hooks when you need them (`--schema-cache-ttl`, `--run-hooks`)
 
 ## Installation
 
@@ -50,6 +53,9 @@ Installing with `pipx` keeps `swain_cli` isolated; alternatively run `pip instal
 # Prime the embedded runtime so the first real run is instant
 swain_cli engine install-jre
 
+# Create a config file (optional)
+swain_cli config init
+
 # Explore generators and craft a command via guided prompts
 swain_cli interactive
 
@@ -59,6 +65,9 @@ swain_cli list-generators
 # Generate Python and TypeScript clients into ./sdks/<generator>
 swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
   -p packageName=my_api_client -p packageVersion=0.3.0
+
+# Preview the resolved plan without downloading/fetching anything
+swain_cli gen --plan-only -i ./openapi.yaml -l python -o ./sdks
 ```
 `swain_cli` streams generator output directly so you see progress in real time.
 
@@ -72,16 +81,26 @@ swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
 - Operation examples are skipped by default (`--skip-operation-example`) to avoid OpenAPI Generator blowing up on circular schemas; pass your own generator arg to opt back in if you really need them.
 - To match modern OAS defaults the CLI automatically adds `-p disallowAdditionalPropertiesIfNotPresent=false`. Opt into stricter behaviour with `-p disallowAdditionalPropertiesIfNotPresent=true` or a generator config file.
 - The `typescript` shortcut maps to `typescript-axios`; request `typescript-fetch` explicitly when you need that runtime.
+- Plan output:
+  - `--plan-only` is side-effect free (no network / no downloads).
+  - `--dry-run` can resolve schemas (may fetch/auth) but does not invoke the generator.
+  - Use `--plan-format json --pretty` for machine-readable plans.
+- Schema caching: pass `--schema-cache-ttl 10m` (or `2h`) to cache fetched schemas; disable with `--no-schema-cache`.
+- Hooks (dangerous): pass `--run-hooks` to enable `--post-hook` commands and any hooks configured in a profile.
 
 ## Command reference
-- `swain_cli interactive` — ask a short set of questions, preview the matching `swain_cli gen` command, and optionally run it on the spot. Seed the wizard with `--java-opt` and pass raw OpenAPI Generator flags via `--generator-arg` so interactive runs match your scripts.
+- `swain_cli interactive` — guided prompts to build a `swain_cli gen` command (use `--no-run` to only print).
 - `swain_cli list-generators` — enumerate all generators provided by the pinned OpenAPI Generator JAR. Add `--engine system` to validate a local Java installation instead.
-- `swain_cli doctor` — print environment information, cache paths, installed JREs, and JAR availability to help diagnose setup issues.
-- `swain_cli auth` — manage credentials for hosted Swain services (`login`, `logout`, `status`). Tokens live in the system keyring; use `SWAIN_CLI_AUTH_TOKEN` for ephemeral automation.
+- `swain_cli doctor` — print environment information, cache paths, installed JREs, and JAR availability (`--format json` for automation/support bundles).
+- `swain_cli auth` — manage credentials for hosted Swain services (`login`, `logout`, `status`, `refresh`).
+- `swain_cli config` — manage the TOML config file (`path`, `init`, `show`).
+- `swain_cli profiles` — inspect named generation profiles from the config file (`list`, `show`).
 - `swain_cli projects` — list Swain projects (non-interactive; JSON by default).
 - `swain_cli connections` — list Swain connections by `--project-id`/`--connection-id` (non-interactive; JSON by default).
 - `swain_cli schema` — fetch a Swain connection schema by `--connection-id` (prints to stdout, or write with `--out`).
-- `swain_cli engine <action>` — switch between the embedded runtime and your system Java, install the JRE ahead of time, or update the pinned JAR.
+- `swain_cli engine <action>` — inspect, clean, and manage the embedded runtime (`status`, `paths`, `clean`, `prune-jars`, `install-jre`, `update-jar`).
+- `swain_cli plugins list` — list installed plugins (entry points group: `swain_cli.plugins`).
+- `swain_cli self-update` — replace the running binary with a newer release (binary installs only).
 
 Run `swain_cli --help` or `swain_cli <command> --help` for full usage.
 
@@ -89,8 +108,9 @@ Run `swain_cli --help` or `swain_cli <command> --help` for full usage.
 Use the `auth` subcommands to prepare credentials before generating SDKs against hosted Swain projects.
 
 - `swain_cli auth login` — authenticate via username/password (`POST /auth/login`). Access and refresh tokens are stored in the system keyring.
-- Refresh tokens are stored for future use; the CLI does not currently auto-refresh expired access tokens.
+- Refresh tokens are stored for future use; use `swain_cli auth refresh` to refresh manually.
 - For ephemeral automation, set `SWAIN_CLI_AUTH_TOKEN` (takes precedence over the keyring).
+- For CI systems that prefer file-based secrets, set `SWAIN_CLI_AUTH_TOKEN_FILE` to a file containing the token.
 - `swain_cli auth status` — inspect the active token source and storage location.
 - `swain_cli auth logout` — clear the stored token.
 - The interactive wizard checks for a token before listing projects and will prompt you to sign in if missing.
@@ -100,17 +120,31 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 - **Custom asset base (advanced)** — set `SWAIN_CLI_ASSET_BASE` to override where embedded JRE archives are downloaded from.
 - **System engine** — add `--engine system` (or export `SWAIN_CLI_ENGINE=system`) to run with whatever `java` is already on `PATH`.
 - **Offline use** — prime the cache via `swain_cli engine install-jre` and `swain_cli engine update-jar --version 7.6.0` (or run `swain_cli list-generators` once) or copy an existing cache directory between machines.
+- **Integrity checks** — downloads are verified by checksum by default. Set `SWAIN_CLI_VERIFY_SIGNATURES=1` to additionally verify GPG signatures for release assets when available (requires `gpg`).
 
 ## Running in CI
 1. Install the package (`pipx install swain_cli` or `pip install swain_cli`).
 2. Pre-install the embedded runtime during setup: `swain_cli engine install-jre`.
 3. Cache the swain_cli cache directory between jobs to reuse downloads.
 4. Invoke `swain_cli gen` with your schema and desired generators; capture `./sdks` (or your chosen output path) as build artefacts.
+5. Optional: run `swain_cli gen --plan-only ...` as a fast “configuration validation” step.
 
 Swain discovery helpers for automation:
 - `swain_cli projects --format json`
 - `swain_cli connections --project-id 123 --format json`
 - `swain_cli schema --connection-id 456 --out openapi.json`
+
+## YAML patching (optional)
+Schema patching works for JSON out of the box. If you need to patch YAML specs, install the extra:
+```bash
+pipx install "swain_cli[yaml]"
+```
+
+## Container image (CI)
+We publish a container image with the embedded toolchain pre-warmed (JRE + pinned generator jar). Run:
+```bash
+docker run --rm ghcr.io/<owner>/swain_cli --help
+```
 
 ## Troubleshooting
 - **Download failures** — check proxy/firewall configuration, or download the JRE asset manually from the GitHub release and place it under the cache path from `swain_cli doctor`.

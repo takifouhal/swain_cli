@@ -22,6 +22,8 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - `swain_cli/cli.py`: Typer commands + wiring (no prompt/HTTP details).
 - `swain_cli/interactive.py`: interactive wizard UX (no HTTP details).
 - `swain_cli/args.py`: typed argument models shared across modules.
+- `swain_cli/config.py`: TOML config + profiles (no CLI wiring).
+- `swain_cli/context.py`: dependency injection (HTTP client factory, config plumbing).
 - `swain_cli/generator.py`: orchestrates schema resolution + OpenAPI Generator invocation.
 - `swain_cli/engine.py`: embedded JRE/JAR management + subprocess execution.
 - `swain_cli/auth.py`: credential login + token storage (env/keyring) + tenant ID resolution.
@@ -29,6 +31,11 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - `swain_cli/crudsql.py`: CrudSQL schema discovery + downloads over HTTP.
 - `swain_cli/urls.py`: URL normalization + endpoint building.
 - `swain_cli/http.py`: shared HTTP helpers (headers, error formatting).
+- `swain_cli/schema_cache.py`: opt-in schema fetch caching.
+- `swain_cli/plugins.py`: optional entry-point plugins (schema resolution hooks).
+- `swain_cli/updater.py`: self-update logic for standalone binaries.
+- `swain_cli/signatures.py`: detached signature verification (GPG).
+- `swain_cli/prompts.py`: reusable prompt helpers for `questionary`.
 
 ## Target state (convergence checklist)
 - Keep business logic testable: extract pure helpers and prefer dependency injection at module boundaries.

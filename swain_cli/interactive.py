@@ -9,12 +9,14 @@ from typing import Any, Callable, List, Optional, Protocol, Sequence
 import questionary
 
 from .args import GenArgs, InteractiveArgs
+from .config import ProfileConfig, load_config, resolve_config_path, upsert_profile
 from .console import log, log_error
-from .constants import COMMON_LANGUAGES, EXIT_CODE_INTERRUPT
+from .constants import COMMON_LANGUAGES, EXIT_CODE_INTERRUPT, PINNED_GENERATOR_VERSION
 from .engine import resolve_java_opts
 from .errors import CLIError
 from .generator import ensure_generator_arg_defaults
 from .prompts import InteractionAborted
+from .schema_cache import parse_ttl_seconds
 from .swain_api import (
     SwainConnection,
     SwainProject,
@@ -23,7 +25,7 @@ from .swain_api import (
     swain_dynamic_swagger_from_connection,
 )
 from .urls import normalize_base_url, resolve_base_urls
-from .utils import format_cli_command
+from .utils import format_cli_command, redact
 
 
 class PromptConfirm(Protocol):
@@ -43,6 +45,10 @@ class PromptText(Protocol):
 
 class PromptSelect(Protocol):
     def __call__(self, prompt: str, choices: Sequence[Any]) -> Any: ...
+
+
+class PromptMultiSelect(Protocol):
+    def __call__(self, prompt: str, choices: Sequence[Any]) -> List[Any]: ...
 
 
 class InteractiveAuthSetup(Protocol):
@@ -72,6 +78,7 @@ class CrudSqlDynamicSwaggerUrl(Protocol):
 class InteractiveDeps:
     prompt_confirm: PromptConfirm
     prompt_select: PromptSelect
+    prompt_multi_select: PromptMultiSelect
     prompt_text: PromptText
     interactive_auth_setup: InteractiveAuthSetup
     require_auth_token: RequireAuthToken
@@ -90,6 +97,7 @@ def coerce_interactive_args(raw: Any) -> InteractiveArgs:
     generator_version = getattr(raw, "generator_version", None)
     java_opts = list(getattr(raw, "java_opts", []) or [])
     generator_args = list(getattr(raw, "generator_args", None) or [])
+    no_run = bool(getattr(raw, "no_run", False))
     engine_choice = getattr(raw, "engine", "embedded") or "embedded"
     engine_choice = str(engine_choice).lower()
     return InteractiveArgs(
@@ -99,6 +107,7 @@ def coerce_interactive_args(raw: Any) -> InteractiveArgs:
         swain_base_url=swain_base_arg,
         crudsql_url=crudsql_base_arg,
         engine=engine_choice,
+        no_run=no_run,
     )
 
 
@@ -207,21 +216,149 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
             validate=_validate_output_dir,
         )
 
-        language_hint = ", ".join(COMMON_LANGUAGES)
-
-        languages_raw = deps.prompt_text(
-            f"Target languages (comma separated, e.g. {language_hint})",
-            default="python,typescript",
-            validate=_validate_languages,
+        language_choices = [
+            questionary.Choice(
+                title=lang,
+                value=lang,
+                checked=(lang in {"python", "typescript"}),
+            )
+            for lang in COMMON_LANGUAGES
+        ]
+        languages_selected = deps.prompt_multi_select(
+            "Select target languages",
+            language_choices,
         )
-        languages = [lang.lower() for lang in _parse_languages(languages_raw)]
+        languages = [str(lang).strip().lower() for lang in languages_selected if str(lang).strip()]
+        if not languages:
+            raise CLIError("please select at least one language")
 
-        config_value = None
-        templates_value = None
+        generator_version = args.generator_version
+        config_value: Optional[str] = None
+        templates_value: Optional[str] = None
         additional_properties: List[str] = []
         sys_props: List[str] = []
+        generator_args = list(generator_args)
         skip_validate = False
         verbose = False
+        patch_base_url = True
+        parallel = 1
+        schema_cache_ttl: Optional[str] = None
+        no_schema_cache = False
+        post_hooks: List[str] = []
+        run_hooks = False
+
+        if deps.prompt_confirm("Configure advanced generator options?", default=False):
+            config_value = deps.prompt_text(
+                "Generator config file (-c) (leave blank to skip)",
+                default="",
+                allow_empty=True,
+            ) or None
+            if config_value:
+                path = Path(config_value).expanduser()
+                if not path.exists():
+                    raise CLIError(f"generator config file not found: {path}")
+
+            templates_value = deps.prompt_text(
+                "Templates directory (-t) (leave blank to skip)",
+                default="",
+                allow_empty=True,
+            ) or None
+            if templates_value:
+                path = Path(templates_value).expanduser()
+                if not path.exists() or not path.is_dir():
+                    raise CLIError(f"templates directory not found: {path}")
+
+            if deps.prompt_confirm("Add additional properties (-p)?", default=False):
+                while True:
+                    prop = deps.prompt_text("Additional property (key=value)", default="")
+                    if "=" not in prop or not prop.split("=", 1)[0].strip():
+                        raise CLIError("additional properties must be in key=value format")
+                    additional_properties.append(prop)
+                    if not deps.prompt_confirm("Add another property?", default=True):
+                        break
+
+            if deps.prompt_confirm("Add system properties (-D)?", default=False):
+                while True:
+                    prop = deps.prompt_text("System property (key=value)", default="")
+                    if "=" not in prop or not prop.split("=", 1)[0].strip():
+                        raise CLIError("system properties must be in key=value format")
+                    sys_props.append(prop)
+                    if not deps.prompt_confirm("Add another system property?", default=True):
+                        break
+
+            if deps.prompt_confirm("Add raw OpenAPI Generator args?", default=False):
+                while True:
+                    arg = deps.prompt_text("Generator arg (e.g. --global-property=apis=Foo)", default="")
+                    generator_args.append(arg)
+                    if not deps.prompt_confirm("Add another generator arg?", default=True):
+                        break
+
+            if deps.prompt_confirm("Generate docs/tests?", default=False):
+                generator_args.append(
+                    "--global-property=apiDocs=true,apiTests=true,modelDocs=true,modelTests=true"
+                )
+
+            patch_base_url = deps.prompt_confirm(
+                "Patch schema base URL (recommended)?",
+                default=True,
+            )
+
+            parallel_raw = deps.prompt_text(
+                "Parallel generation workers (1 disables parallelism)",
+                default="1",
+            )
+            try:
+                parallel_value = int(parallel_raw)
+            except ValueError as exc:
+                raise CLIError("parallel must be an integer >= 1") from exc
+            if parallel_value < 1:
+                raise CLIError("parallel must be >= 1")
+            parallel = parallel_value
+
+            if deps.prompt_confirm("Cache fetched schemas?", default=False):
+                ttl_raw = deps.prompt_text("Schema cache TTL (e.g. 10m, 2h)", default="10m")
+                parse_ttl_seconds(ttl_raw)
+                schema_cache_ttl = ttl_raw
+
+            if deps.prompt_confirm("Add post-generation hooks?", default=False):
+                while True:
+                    cmd = deps.prompt_text("Post-hook command (runs in generated dir)", default="")
+                    post_hooks.append(cmd)
+                    if not deps.prompt_confirm("Add another hook?", default=True):
+                        break
+                run_hooks = deps.prompt_confirm(
+                    "Enable running hooks by default? (dangerous)",
+                    default=False,
+                )
+
+            if deps.prompt_confirm("Choose OpenAPI Generator version?", default=False):
+                cached_versions: List[str] = []
+                try:
+                    from .engine import list_cached_jars
+
+                    for entry in list_cached_jars():
+                        version = str(entry).split(" -> ", 1)[0].strip()
+                        if version:
+                            cached_versions.append(version)
+                except Exception:
+                    cached_versions = []
+                seen = set()
+                versions: List[str] = []
+                for version in [PINNED_GENERATOR_VERSION, *sorted(cached_versions)]:
+                    if version in seen:
+                        continue
+                    seen.add(version)
+                    versions.append(version)
+                choices = [
+                    questionary.Choice(
+                        title=f"{versions[0]} (pinned)",
+                        value=versions[0],
+                    )
+                ]
+                for version in versions[1:]:
+                    suffix = " (cached)" if version in cached_versions else ""
+                    choices.append(questionary.Choice(title=f"{version}{suffix}", value=version))
+                generator_version = deps.prompt_select("OpenAPI Generator version", choices)
 
     except InteractionAborted:
         log_error("interactive session cancelled")
@@ -268,20 +405,28 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
     if templates_value:
         log(f"  templates: {templates_value}")
     if additional_properties:
-        log(f"  additional properties: {additional_properties}")
+        log(f"  additional properties: {redact(str(additional_properties))}")
     if sys_props:
-        log(f"  system properties: {sys_props}")
+        log(f"  system properties: {redact(str(sys_props))}")
     if generator_args:
-        log(f"  extra generator args: {generator_args}")
+        log(f"  extra generator args: {redact(str(generator_args))}")
+    if generator_version:
+        log(f"  generator version: {generator_version}")
+    log(f"  patch base url: {patch_base_url}")
+    log(f"  parallel: {parallel}")
+    if schema_cache_ttl:
+        log(f"  schema cache ttl: {schema_cache_ttl}")
+    if post_hooks:
+        log(f"  post hooks: {len(post_hooks)} (run={run_hooks})")
     log(f"  engine: {engine_choice}")
     log(f"  skip validate: {skip_validate}")
     log(f"  verbose: {verbose}")
     java_preview_opts = resolve_java_opts(java_cli_opts).options
-    log(f"  java options: {format_cli_command(java_preview_opts)}")
+    log(f"  java options: {redact(format_cli_command(java_preview_opts))}")
 
     command_preview: List[str] = ["swain_cli"]
-    if args.generator_version:
-        command_preview.extend(["--generator-version", args.generator_version])
+    if generator_version:
+        command_preview.extend(["--generator-version", generator_version])
     command_preview.append("gen")
     if tenant_id:
         command_preview.extend(["--swain-tenant-id", tenant_id])
@@ -295,6 +440,14 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
     command_preview.extend(["-o", out_value])
     for lang in languages:
         command_preview.extend(["-l", lang])
+    if not patch_base_url:
+        command_preview.append("--no-patch-base-url")
+    if parallel != 1:
+        command_preview.extend(["--parallel", str(parallel)])
+    if schema_cache_ttl:
+        command_preview.extend(["--schema-cache-ttl", schema_cache_ttl])
+    if no_schema_cache:
+        command_preview.append("--no-schema-cache")
     if config_value:
         command_preview.extend(["-c", config_value])
     if templates_value:
@@ -303,6 +456,10 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
         command_preview.extend(["-p", prop])
     for arg in generator_args:
         command_preview.extend(["--generator-arg", arg])
+    for cmd in post_hooks:
+        command_preview.extend(["--post-hook", cmd])
+    if run_hooks:
+        command_preview.append("--run-hooks")
     for sys_prop in sys_props:
         command_preview.extend(["-D", sys_prop])
     if skip_validate:
@@ -317,14 +474,58 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
     for opt in preview_java_opts:
         command_preview.extend(["--java-opt", opt])
 
-    log(f"equivalent command: {format_cli_command(command_preview)}")
+    log(f"equivalent command: {redact(format_cli_command(command_preview))}")
+
+    if deps.prompt_confirm("Save this configuration as a profile?", default=False):
+        profile_name = deps.prompt_text(
+            "Profile name",
+            default="",
+        ).strip()
+        config_path = resolve_config_path()
+        existing = load_config(config_path)
+        overwrite = False
+        if profile_name in existing.profiles:
+            overwrite = deps.prompt_confirm(
+                f"profile {profile_name!r} exists; overwrite?",
+                default=False,
+            )
+            if not overwrite:
+                log("profile not saved")
+        if profile_name and (overwrite or profile_name not in existing.profiles):
+            upsert_profile(
+                profile_name,
+                ProfileConfig(
+                    languages=languages,
+                    engine=engine_choice,
+                    generator_version=generator_version,
+                    java_opts=list(java_cli_opts),
+                    config=config_value,
+                    templates=templates_value,
+                    additional_properties=list(additional_properties),
+                    generator_arg=list(generator_args),
+                    system_properties=list(sys_props),
+                    patch_base_url=patch_base_url,
+                    parallel=parallel,
+                    schema_cache_ttl=schema_cache_ttl,
+                    no_schema_cache=no_schema_cache,
+                    post_hooks=list(post_hooks),
+                    run_hooks=run_hooks,
+                ),
+                overwrite=overwrite,
+                path=config_path,
+            )
+            log(f"saved profile {profile_name!r} to {config_path}")
+
+    if args.no_run:
+        log("no-run mode enabled; generation not executed")
+        return 0
 
     if not deps.prompt_confirm("Run generation now?", default=True):
         log("generation skipped; run the command above when ready")
         return 0
 
     gen_args = GenArgs(
-        generator_version=args.generator_version,
+        generator_version=generator_version,
         engine=engine_choice,
         schema=None if crudsql_base else schema_value,
         crudsql_url=crudsql_base if crudsql_base_override else None,
@@ -338,9 +539,15 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
         templates=templates_value,
         additional_properties=additional_properties,
         generator_arg=generator_args,
+        post_hooks=post_hooks,
+        run_hooks=run_hooks,
         java_opts=list(java_cli_opts),
         system_properties=sys_props,
         skip_validate_spec=skip_validate,
         verbose=verbose,
+        patch_base_url=patch_base_url,
+        parallel=parallel,
+        schema_cache_ttl=schema_cache_ttl,
+        no_schema_cache=no_schema_cache,
     )
     return deps.handle_gen(gen_args)

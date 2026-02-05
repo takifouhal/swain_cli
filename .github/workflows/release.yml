@@ -262,6 +262,22 @@ jobs:
           PY
           chmod +x dist/install.sh
 
+      - name: Sign release assets (optional, GPG)
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          while IFS= read -r -d '' file; do
+            if [[ "$file" == *.asc ]]; then
+              continue
+            fi
+            gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE:-}" \
+              --armor --detach-sign -o "${file}.asc" "$file"
+          done < <(find dist -type f -print0)
+
       - name: List downloaded assets
         run: ls -R dist
 

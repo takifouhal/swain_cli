@@ -11,6 +11,11 @@ import httpx
 
 from .errors import CLIError
 
+try:  # Optional dependency (swain_cli[yaml])
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None
+
 
 def _normalize_path(value: str) -> str:
     normalized = (value or "").strip()
@@ -146,10 +151,18 @@ def inject_base_url(schema_path: Path, base_url: str) -> Optional[str]:
     except OSError as exc:
         raise CLIError(f"failed to read schema file: {exc}") from exc
 
+    doc: Any
+    format_kind = "json"
     try:
         doc = json.loads(raw)
     except json.JSONDecodeError:
-        return None
+        if yaml is None:
+            return None
+        try:
+            doc = yaml.safe_load(raw.decode("utf-8", "replace"))
+        except Exception:
+            return None
+        format_kind = "yaml"
     if not isinstance(doc, dict):
         return None
 
@@ -205,10 +218,17 @@ def inject_base_url(schema_path: Path, base_url: str) -> Optional[str]:
         return None
 
     try:
-        schema_path.write_text(
-            json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        if format_kind == "json":
+            schema_path.write_text(
+                json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            assert yaml is not None
+            schema_path.write_text(
+                yaml.safe_dump(doc, sort_keys=True, allow_unicode=True) + "\n",
+                encoding="utf-8",
+            )
     except OSError as exc:
         raise CLIError(f"failed to update schema file: {exc}") from exc
     return written_base

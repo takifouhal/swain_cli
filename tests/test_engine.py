@@ -1,5 +1,10 @@
+import os
 import platform
 import re
+import tarfile
+import zipfile
+from io import BytesIO
+from time import time as now
 from types import SimpleNamespace
 
 import httpx
@@ -144,6 +149,40 @@ def test_extract_archive_unknown(tmp_path):
     archive.write_text("dummy")
     with pytest.raises(CLIError):
         engine.extract_archive(archive, tmp_path / "out")
+
+
+def test_extract_archive_blocks_zip_slip(tmp_path):
+    archive = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("../evil.txt", "owned")
+    with pytest.raises(CLIError):
+        engine.extract_archive(archive, tmp_path / "out")
+
+
+def test_extract_archive_blocks_tar_slip(tmp_path):
+    archive = tmp_path / "archive.tar.gz"
+    data = b"owned"
+    with tarfile.open(archive, "w:gz") as tf:
+        info = tarfile.TarInfo(name="../evil.txt")
+        info.size = len(data)
+        tf.addfile(info, BytesIO(data))
+    with pytest.raises(CLIError):
+        engine.extract_archive(archive, tmp_path / "out")
+
+
+def test_cache_lock_removes_stale_lock(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    monkeypatch.setattr(engine, "cache_root", lambda create=True: cache_dir)
+
+    lock_path = engine.cache_lock_path()
+    lock_path.write_text("stale", encoding="utf-8")
+    old = now() - 10_000
+    os.utime(lock_path, (old, old))
+
+    with engine.cache_lock(timeout_seconds=0.1, stale_after_seconds=0):
+        assert lock_path.exists()
+    assert not lock_path.exists()
 
 
 def test_parse_checksum_file_variants(tmp_path):

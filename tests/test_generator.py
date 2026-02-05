@@ -388,3 +388,151 @@ def test_handle_gen_disables_docs_when_out_of_memory_with_custom_java(monkeypatc
     first_cmd, second_cmd = calls
     assert any("apiDocs=false" in part for part in first_cmd)
     assert any("apiDocs=false" in part for part in second_cmd)
+
+
+def test_handle_gen_plan_only_json_is_stdout_clean_and_creates_no_dirs(monkeypatch, tmp_path, capfd):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text("{}", encoding="utf-8")
+
+    def fail(*args, **kwargs):
+        raise AssertionError("generation should not run in plan-only mode")
+
+    monkeypatch.setattr(generator, "run_openapi_generator", fail)
+    monkeypatch.setattr(generator, "resolve_generator_jar", fail)
+
+    out_dir = tmp_path / "out"
+    args = GenArgs(
+        generator_version=None,
+        engine="embedded",
+        schema=str(schema_file),
+        crudsql_url=None,
+        swain_base_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
+        swain_tenant_id=None,
+        out=str(out_dir),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
+        skip_validate_spec=False,
+        verbose=False,
+        java_opts=[],
+        plan_only=True,
+        plan_format="json",
+    )
+
+    assert generator.handle_gen(args) == 0
+    captured, err = capfd.readouterr()
+    payload = json.loads(captured)
+    assert payload["mode"] == "plan-only"
+    assert payload["schema"]["mode"] == "explicit"
+    assert payload["runs"][0]["resolved_language"] == "python"
+    assert not out_dir.exists()
+    assert err == ""
+
+
+def test_handle_gen_does_not_run_hooks_without_flag(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text(
+        '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "run_openapi_generator", lambda *a, **k: (0, ""))
+
+    def fail_hook(*args, **kwargs):
+        raise AssertionError("hook should not run")
+
+    monkeypatch.setattr(generator, "_run_hook", fail_hook)
+
+    args = GenArgs(
+        generator_version=None,
+        engine="embedded",
+        schema=str(schema_file),
+        crudsql_url=None,
+        swain_base_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
+        swain_tenant_id=None,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        java_opts=[],
+        post_hooks=["echo hi"],
+        run_hooks=False,
+    )
+    assert generator.handle_gen(args) == 0
+
+
+def test_handle_gen_runs_hooks_in_output_dir(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text(
+        '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "run_openapi_generator", lambda *a, **k: (0, ""))
+
+    calls: List[Tuple[List[str], Path]] = []
+
+    def fake_hook(argv, *, cwd, stream=True):
+        calls.append((list(argv), Path(cwd)))
+        return 0, ""
+
+    monkeypatch.setattr(generator, "_run_hook", fake_hook)
+
+    out_dir = tmp_path / "out"
+    args = GenArgs(
+        generator_version=None,
+        engine="embedded",
+        schema=str(schema_file),
+        crudsql_url=None,
+        swain_base_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
+        swain_tenant_id=None,
+        out=str(out_dir),
+        languages=["python", "typescript"],
+        java_opts=[],
+        post_hooks=["echo all"],
+        post_hooks_by_language={"python": ["echo py"], "typescript": ["echo ts"]},
+        run_hooks=True,
+    )
+    assert generator.handle_gen(args) == 0
+    assert len(calls) == 4
+    assert calls[0][1] == out_dir / "python"
+    assert calls[2][1] == out_dir / "typescript-axios"
+
+
+def test_handle_gen_fails_when_hook_fails(monkeypatch, tmp_path):
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text(
+        '{"swagger":"2.0","host":"","schemes":[],"basePath":"/api","paths":{}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+    monkeypatch.setattr(generator, "run_openapi_generator", lambda *a, **k: (0, ""))
+
+    def failing_hook(argv, *, cwd, stream=True):
+        return 13, "hook failed\n"
+
+    monkeypatch.setattr(generator, "_run_hook", failing_hook)
+
+    args = GenArgs(
+        generator_version=None,
+        engine="embedded",
+        schema=str(schema_file),
+        crudsql_url=None,
+        swain_base_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
+        swain_tenant_id=None,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        java_opts=[],
+        post_hooks=["echo hi"],
+        run_hooks=True,
+    )
+    assert generator.handle_gen(args) == 13

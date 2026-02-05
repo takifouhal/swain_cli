@@ -10,6 +10,14 @@ _LOG_TO_STDERR = False
 _LOG_SILENCED = False
 
 
+def configure_console(*, quiet: bool = False, stderr: bool = False) -> None:
+    global _LOG_TO_STDERR, _LOG_SILENCED
+    if stderr:
+        _LOG_TO_STDERR = True
+    if quiet:
+        _LOG_SILENCED = True
+
+
 def log(message: str) -> None:
     if _LOG_SILENCED:
         return

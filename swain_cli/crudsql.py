@@ -9,22 +9,38 @@ from typing import Optional, Union
 import httpx
 
 from .console import log
+from .context import AppContext, default_http_client_factory
 from .errors import CLIError
-from .http import describe_http_error, http_timeout, request_headers
+from .http import (
+    describe_http_error,
+    http_timeout,
+    request_headers,
+    request_with_retries,
+)
 from .urls import crudsql_dynamic_swagger_url
 from .utils import write_bytes_to_tempfile
 
 
 def crudsql_discover_schema_url(
-    base_url: str, token: str, tenant_id: Optional[Union[str, int]] = None
+    base_url: str,
+    token: str,
+    tenant_id: Optional[Union[str, int]] = None,
+    *,
+    ctx: Optional[AppContext] = None,
 ) -> str:
     normalized_base = base_url.rstrip("/") + "/"
     discovery_url = httpx.URL(normalized_base).join("api/schema-location")
     headers = request_headers(token, tenant_id=tenant_id)
 
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        response = client.get(discovery_url, headers=headers)
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
+        response = request_with_retries(
+            client,
+            "GET",
+            discovery_url,
+            headers=headers,
+        )
     if response.status_code == 404:
         return crudsql_dynamic_swagger_url(base_url)
     try:
@@ -51,16 +67,26 @@ def crudsql_discover_schema_url(
 
 
 def fetch_crudsql_schema(
-    base_url: str, token: str, *, tenant_id: Optional[Union[str, int]] = None
+    base_url: str,
+    token: str,
+    *,
+    tenant_id: Optional[Union[str, int]] = None,
+    ctx: Optional[AppContext] = None,
 ) -> Path:
-    schema_url = crudsql_discover_schema_url(base_url, token, tenant_id)
+    schema_url = crudsql_discover_schema_url(base_url, token, tenant_id, ctx=ctx)
     log(f"fetching CrudSQL schema from {schema_url}")
     headers = request_headers(token, tenant_id=tenant_id)
 
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         try:
-            response = client.get(schema_url, headers=headers)
+            response = request_with_retries(
+                client,
+                "GET",
+                schema_url,
+                headers=headers,
+            )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             detail = describe_http_error(exc)

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional, Union
+import time
+from typing import Any, Callable, Dict, Optional, Union
 
 import httpx
 
@@ -99,6 +100,79 @@ def describe_http_error(exc: httpx.HTTPError) -> str:
     if target and target not in summary:
         summary = f"{summary} ({target})"
     return summary
+
+
+def request_with_retries(
+    client: httpx.Client,
+    method: str,
+    url: Union[str, httpx.URL],
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    params: Any = None,
+    json: Any = None,
+    max_attempts: int = 3,
+    backoff_initial: float = 0.5,
+    backoff_max: float = 8.0,
+    sleep: Callable[[float], None] = time.sleep,
+    retry_post: bool = False,
+) -> httpx.Response:
+    method_upper = (method or "").upper().strip() or "GET"
+    allow_retry = method_upper in {"GET", "HEAD"} or (
+        retry_post and method_upper == "POST"
+    )
+    retryable_statuses = {408, 429, 500, 502, 503, 504}
+
+    def should_retry_exc(exc: httpx.HTTPError) -> bool:
+        if isinstance(exc, httpx.TimeoutException):
+            return True
+        if isinstance(exc, httpx.RequestError):
+            return True
+        return False
+
+    def retry_delay(attempt: int, response: Optional[httpx.Response]) -> float:
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    parsed = float(retry_after)
+                except ValueError:
+                    parsed = 0.0
+                if parsed > 0:
+                    return min(parsed, backoff_max)
+        if attempt <= 0:
+            return 0.0
+        delay = backoff_initial * (2 ** (attempt - 1))
+        return min(delay, backoff_max)
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = client.request(
+                method_upper,
+                url,
+                headers=headers,
+                params=params,
+                json=json,
+            )
+        except httpx.HTTPError as exc:
+            if not allow_retry or attempt >= max_attempts or not should_retry_exc(exc):
+                raise
+            delay = retry_delay(attempt, None)
+            if delay > 0:
+                sleep(delay)
+            continue
+
+        if (
+            allow_retry
+            and response.status_code in retryable_statuses
+            and attempt < max_attempts
+        ):
+            delay = retry_delay(attempt, response)
+            if delay > 0:
+                sleep(delay)
+            continue
+        return response
 
 
 def caused_by_status(exc: BaseException, status_code: int) -> bool:

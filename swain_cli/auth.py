@@ -6,6 +6,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 
@@ -17,6 +18,7 @@ from keyring.errors import NoKeyringError, PasswordDeleteError
 from .console import log, log_error
 from .constants import (
     AUTH_TOKEN_ENV_VAR,
+    AUTH_TOKEN_FILE_ENV_VAR,
     DEFAULT_SWAIN_BASE_URL,
     KEYRING_REFRESH_USERNAME,
     KEYRING_SERVICE,
@@ -29,6 +31,7 @@ from .http import (
     http_timeout,
     normalize_tenant_id,
     request_headers,
+    request_with_retries,
 )
 from .prompts import prompt_confirm, prompt_password, prompt_select, prompt_text
 from .urls import swain_url
@@ -214,6 +217,21 @@ def mask_token(token: str) -> str:
 
 
 def resolve_auth_token() -> Optional[str]:
+    env_token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
+    if env_token:
+        return env_token
+
+    token_file = os.environ.get(AUTH_TOKEN_FILE_ENV_VAR, "").strip()
+    if token_file:
+        path = Path(token_file).expanduser()
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise CLIError(f"failed to read auth token file {path}: {exc}") from exc
+        if not value:
+            raise CLIError(f"auth token file is empty: {path}")
+        return value
+
     state = load_auth_state()
     return state.access_token
 
@@ -298,7 +316,7 @@ def _fetch_account_name_for_tenant(
     timeout = http_timeout()
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         try:
-            response = client.get(url, headers=headers)
+            response = request_with_retries(client, "GET", url, headers=headers)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -404,6 +422,49 @@ def swain_login_with_credentials(base_url: str, username: str, password: str) ->
     return data
 
 
+def swain_refresh_with_token(base_url: str, refresh_token: str) -> Dict[str, Any]:
+    token_value = refresh_token.strip()
+    if not token_value:
+        raise CLIError("refresh token is empty; run 'swain_cli auth login'")
+
+    candidates = [
+        "auth/refresh",
+        "auth/refresh-token",
+        "auth/refresh_token",
+        "auth/token/refresh",
+    ]
+    payloads = [
+        {"refresh_token": token_value},
+        {"refreshToken": token_value},
+        {"token": token_value},
+    ]
+
+    timeout = http_timeout()
+    headers = request_headers(content_type="application/json")
+    last_error: Optional[str] = None
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        for path in candidates:
+            url = swain_url(base_url, path, enforce_api_prefix=False)
+            for payload in payloads:
+                try:
+                    response = client.post(url, headers=headers, json=payload)
+                    if response.status_code in {404, 405}:
+                        continue
+                    response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    last_error = describe_http_error(exc)
+                    continue
+
+                try:
+                    data = response.json()
+                except json.JSONDecodeError as exc:
+                    raise CLIError("refresh response was not valid JSON") from exc
+                if isinstance(data, dict):
+                    return data
+    detail = last_error or "no refresh endpoint matched"
+    raise CLIError(f"refresh failed: {detail}")
+
+
 def read_login_token(args: SimpleNamespace) -> str:
     username = getattr(args, "username", None)
     password = getattr(args, "password", None)
@@ -469,6 +530,35 @@ def handle_auth_login(args: SimpleNamespace) -> int:
     return 0
 
 
+def handle_auth_refresh(args: SimpleNamespace) -> int:
+    if (os.environ.get(AUTH_TOKEN_ENV_VAR) or "").strip():
+        raise CLIError(
+            f"cannot refresh while {AUTH_TOKEN_ENV_VAR} is set; unset it or run 'swain_cli auth login'"
+        )
+    if (os.environ.get(AUTH_TOKEN_FILE_ENV_VAR) or "").strip():
+        raise CLIError(
+            f"cannot refresh while {AUTH_TOKEN_FILE_ENV_VAR} is set; unset it or run 'swain_cli auth login'"
+        )
+
+    state = load_auth_state()
+    if not state.refresh_token:
+        raise CLIError("no refresh token stored; run 'swain_cli auth login'")
+
+    auth_base = getattr(args, "auth_base_url", None) or DEFAULT_SWAIN_BASE_URL
+    data = swain_refresh_with_token(auth_base, state.refresh_token)
+    new_access = safe_str(data.get("token") or data.get("access_token") or data.get("accessToken"))
+    if not new_access:
+        raise CLIError("refresh response did not include an access token")
+    new_refresh = safe_str(
+        data.get("refresh_token")
+        or data.get("refreshToken")
+        or data.get("refresh-token")
+    )
+    persist_auth_token(new_access, new_refresh)
+    log(f"refreshed access token ({mask_token(new_access)})")
+    return 0
+
+
 def handle_auth_logout(_: SimpleNamespace) -> int:
     clear_auth_state()
     log("removed stored access token")
@@ -481,6 +571,13 @@ def handle_auth_status(_: SimpleNamespace) -> int:
         log("auth token source: environment variable")
         log(f"effective token: {mask_token(env_token)}")
         return 0
+    token_file = os.environ.get(AUTH_TOKEN_FILE_ENV_VAR, "").strip()
+    if token_file:
+        token_value = resolve_auth_token()
+        if token_value:
+            log("auth token source: token file")
+            log(f"effective token: {mask_token(token_value)}")
+            return 0
     state = load_auth_state()
     if state.access_token:
         log("auth token source: system keyring")

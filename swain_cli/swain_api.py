@@ -10,8 +10,15 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from .console import log
+from .context import AppContext, default_http_client_factory
 from .errors import CLIError
-from .http import caused_by_status, describe_http_error, http_timeout, request_headers
+from .http import (
+    caused_by_status,
+    describe_http_error,
+    http_timeout,
+    request_headers,
+    request_with_retries,
+)
 from .urls import swain_url
 from .utils import as_dict, pick, safe_int, safe_str, write_bytes_to_tempfile
 
@@ -57,17 +64,21 @@ def fetch_swain_projects(
     tenant_id: Optional[Union[str, int]] = None,
     page_size: int = 50,
     max_pages: int = 25,
+    ctx: Optional[AppContext] = None,
 ) -> List[SwainProject]:
     url = swain_url(base_url, "Project")
     headers = request_headers(token, tenant_id=tenant_id)
     timeout = http_timeout()
     projects: List[SwainProject] = []
     page = 1
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         while True:
             params = {"page": page, "pageSize": page_size}
             try:
-                response = client.get(url, headers=headers, params=params)
+                response = request_with_retries(
+                    client, "GET", url, headers=headers, params=params
+                )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 detail = describe_http_error(exc)
@@ -115,6 +126,7 @@ def fetch_swain_projects_with_fallback(
     tenant_id: Optional[Union[str, int]] = None,
     page_size: int = 50,
     max_pages: int = 25,
+    ctx: Optional[AppContext] = None,
 ) -> List[SwainProject]:
     try:
         return fetch_swain_projects(
@@ -123,6 +135,7 @@ def fetch_swain_projects_with_fallback(
             tenant_id=tenant_id,
             page_size=page_size,
             max_pages=max_pages,
+            ctx=ctx,
         )
     except CLIError as exc:
         if not fallback_base or fallback_base == primary_base:
@@ -135,6 +148,7 @@ def fetch_swain_projects_with_fallback(
         tenant_id=tenant_id,
         page_size=page_size,
         max_pages=max_pages,
+        ctx=ctx,
     )
 
 
@@ -225,6 +239,7 @@ def fetch_swain_connections(
     project_id: Optional[int] = None,
     connection_id: Optional[int] = None,
     page_size: int = 100,
+    ctx: Optional[AppContext] = None,
 ) -> List[SwainConnection]:
     url = swain_url(base_url, "Connection/filter")
     headers = request_headers(token, tenant_id=tenant_id)
@@ -232,10 +247,19 @@ def fetch_swain_connections(
         project_id=project_id, connection_id=connection_id
     )
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         params = {"page": 1, "pageSize": page_size}
         try:
-            response = client.post(url, headers=headers, params=params, json=payload)
+            response = request_with_retries(
+                client,
+                "POST",
+                url,
+                headers=headers,
+                params=params,
+                json=payload,
+                retry_post=True,
+            )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             detail = describe_http_error(exc)
@@ -267,6 +291,7 @@ def fetch_swain_connections_with_fallback(
     project_id: Optional[int] = None,
     connection_id: Optional[int] = None,
     page_size: int = 100,
+    ctx: Optional[AppContext] = None,
 ) -> List[SwainConnection]:
     try:
         return fetch_swain_connections(
@@ -276,6 +301,7 @@ def fetch_swain_connections_with_fallback(
             project_id=project_id,
             connection_id=connection_id,
             page_size=page_size,
+            ctx=ctx,
         )
     except CLIError as exc:
         if not fallback_base or fallback_base == primary_base:
@@ -289,6 +315,7 @@ def fetch_swain_connections_with_fallback(
         project_id=project_id,
         connection_id=connection_id,
         page_size=page_size,
+        ctx=ctx,
     )
 
 
@@ -302,12 +329,14 @@ def fetch_swain_connection_by_id(
     connection_id: int,
     *,
     tenant_id: Optional[Union[str, int]] = None,
+    ctx: Optional[AppContext] = None,
 ) -> SwainConnection:
     connections = fetch_swain_connections(
         base_url,
         token,
         tenant_id=tenant_id,
         connection_id=connection_id,
+        ctx=ctx,
     )
     if not connections:
         raise CLIError(f"connection {connection_id} not found")
@@ -330,6 +359,7 @@ def fetch_swain_connection_schema(
     token: str,
     *,
     tenant_id: Optional[Union[str, int]] = None,
+    ctx: Optional[AppContext] = None,
 ) -> Path:
     # Prefer fetching the swagger directly from the connection endpoint (when
     # available). If that fails, fall back to the backend proxy so it can mint a
@@ -348,7 +378,8 @@ def fetch_swain_connection_schema(
         f"connections/{connection.id}/dynamic_swagger",
     ]
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         response: Optional[httpx.Response] = None
 
         if direct_url:
@@ -357,7 +388,12 @@ def fetch_swain_connection_schema(
                     "fetching connection dynamic swagger directly from"
                     f" {direct_url} (connection {connection.id})"
                 )
-                response = client.get(direct_url, headers=request_headers())
+                response = request_with_retries(
+                    client,
+                    "GET",
+                    direct_url,
+                    headers=request_headers(),
+                )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 log(
@@ -387,7 +423,12 @@ def fetch_swain_connection_schema(
                     f" retrying with legacy route: {schema_url}"
                 )
             try:
-                response = client.get(schema_url, headers=headers)
+                response = request_with_retries(
+                    client,
+                    "GET",
+                    schema_url,
+                    headers=headers,
+                )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 404 and idx + 1 < len(candidate_paths):

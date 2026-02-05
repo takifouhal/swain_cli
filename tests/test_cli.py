@@ -31,6 +31,36 @@ def test_cli_without_command_shows_help():
     assert "Commands" in result.stdout
 
 
+def test_cli_doctor_outputs_json():
+    result = runner.invoke(cli.app, ["doctor", "--format", "json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["cli_version"] == swain_cli.__version__
+    assert "paths" in payload
+    assert "engine" in payload
+
+
+def test_cli_auth_refresh_derives_swain_base_from_crudsql_url(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setenv(constants.CONFIG_ENV_VAR, str(config_path))
+    config_path.write_text(
+        'crudsql_url = "https://api.example.com/crud"\n',
+        encoding="utf-8",
+    )
+
+    captured: Dict[str, Any] = {}
+
+    def fake_handle_auth_refresh(args):
+        captured["auth_base_url"] = getattr(args, "auth_base_url", None)
+        return 0
+
+    monkeypatch.setattr(cli, "handle_auth_refresh", fake_handle_auth_refresh)
+
+    result = runner.invoke(cli.app, ["auth", "refresh"])
+    assert result.exit_code == 0
+    assert captured["auth_base_url"] == "https://api.example.com"
+
+
 def test_main_returns_interrupt_code_on_keyboard_interrupt(monkeypatch):
     class FakeCommand:
         def main(self, *args, **kwargs):
@@ -101,14 +131,13 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
         raw={"id": 2, "project_id": 1},
     )
 
-    confirm_values = iter([False])
+    confirm_values = iter([False, False, False])
 
-    text_values = iter(
-        [
-            "sdks",
-            "python",
-        ]
-    )
+    text_values = iter(["sdks"])
+
+    def fake_multi_select(prompt, choices):
+        assert "languages" in prompt.lower()
+        return ["python"]
 
     def fake_confirm(prompt, default=True):
         try:
@@ -128,6 +157,7 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
         return value
 
     monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
+    monkeypatch.setattr(cli, "prompt_multi_select", fake_multi_select)
     monkeypatch.setattr(cli, "prompt_text", fake_text)
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda auth_base_url=None: None)
     monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
@@ -175,14 +205,13 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         raw={"id": 110, "project_id": 102},
     )
 
-    confirm_values = iter([True])
+    confirm_values = iter([False, False, True])
 
-    text_values = iter(
-        [
-            "sdks",
-            "go",
-        ]
-    )
+    text_values = iter(["sdks"])
+
+    def fake_multi_select(prompt, choices):
+        assert "languages" in prompt.lower()
+        return ["go"]
 
     def fake_confirm(prompt, default=True):
         try:
@@ -202,6 +231,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         return value
 
     monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
+    monkeypatch.setattr(cli, "prompt_multi_select", fake_multi_select)
     monkeypatch.setattr(cli, "prompt_text", fake_text)
     monkeypatch.setattr(cli, "prompt_select", lambda prompt, choices: choices[0].value)
     monkeypatch.setattr(cli, "interactive_auth_setup", lambda auth_base_url=None: None)
@@ -267,6 +297,78 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.crudsql_url is None
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]
     assert dynamic_bases == ["https://api.example.com/crud"]
+
+
+def test_handle_interactive_saves_profile_in_no_run_mode(monkeypatch):
+    project = swain_api.SwainProject(id=1, name="Project", raw={})
+    connection = swain_api.SwainConnection(
+        id=2,
+        database_name="main-db",
+        driver="postgres",
+        stage="prod",
+        project_name="Project",
+        schema_name="public",
+        build_id=10,
+        build_endpoint="https://connection.example.com",
+        connection_endpoint=None,
+        raw={"id": 2, "project_id": 1},
+    )
+
+    confirm_values = iter([False, True])
+    text_values = iter(["sdks", "frontend"])
+
+    def fake_confirm(prompt, default=True):
+        try:
+            return next(confirm_values)
+        except StopIteration:
+            pytest.fail(f"unexpected confirm prompt: {prompt}")
+
+    def fake_text(prompt, default=None, validate=None, allow_empty=False):
+        try:
+            value = next(text_values)
+        except StopIteration:
+            pytest.fail(f"unexpected text prompt: {prompt}")
+        if callable(validate):
+            error = validate(value)
+            if error:
+                pytest.fail(f"validation failed unexpectedly: {error}")
+        return value
+
+    def fake_multi_select(prompt, choices):
+        return ["python"]
+
+    monkeypatch.setattr(cli, "prompt_confirm", fake_confirm)
+    monkeypatch.setattr(cli, "prompt_multi_select", fake_multi_select)
+    monkeypatch.setattr(cli, "prompt_text", fake_text)
+    monkeypatch.setattr(cli, "interactive_auth_setup", lambda auth_base_url=None: None)
+    monkeypatch.setattr(cli, "require_auth_token", lambda purpose="": "env-token")
+    monkeypatch.setattr(
+        cli,
+        "determine_swain_tenant_id",
+        lambda base, token, provided, *, allow_prompt: "1",
+    )
+    monkeypatch.setattr(
+        swain_api,
+        "fetch_swain_projects",
+        lambda base, token, tenant_id=None, **_: [project],
+    )
+    monkeypatch.setattr(
+        swain_api,
+        "fetch_swain_connections",
+        lambda base, token, tenant_id=None, project_id=None, **_: [connection],
+    )
+
+    def fail_handle_gen(args):
+        pytest.fail("generation should not run in --no-run mode")
+
+    monkeypatch.setattr(cli, "handle_gen", fail_handle_gen)
+
+    result = cli.handle_interactive(SimpleNamespace(generator_version=None, no_run=True))
+    assert result == 0
+
+    cfg = cli.load_config(cli.resolve_config_path())
+    assert "frontend" in cfg.profiles
+    assert cfg.profiles["frontend"].languages == ["python"]
 
 
 def test_cli_projects_outputs_json(monkeypatch):

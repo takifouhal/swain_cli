@@ -6,7 +6,8 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 - **Version bumps** — update `swain_cli/__init__.py` (packaging version is sourced from `__version__`) and any other user-facing version strings.
 - **Embedded assets** — refresh JRE checksums (`JRE_ASSETS`) plus the `ASSET_BASE` constant in `swain_cli/constants.py` whenever download locations change.
 - **Automation** — `release.yml` builds JREs, publishes to PyPI via Trusted Publishing (OIDC), and (optionally) creates PyInstaller binaries; `ci.yml` runs pytest across the supported Python versions on every push/PR.
-- **Homebrew tap** — bump the version/URLs/checksums in `Formula/swain_cli.rb` so `brew upgrade` can pick up the release.
+- **Homebrew tap** — bump the version/URLs/checksums in `Formula/swain_cli.rb` so `brew upgrade` can pick up the release (use `scripts/bump-formula.py` after assets are uploaded).
+- **Optional signing** — if `GPG_PRIVATE_KEY` (and optionally `GPG_PASSPHRASE`) are configured in GitHub secrets, `release.yml` will attach `.asc` signatures for every release asset.
 
 ## End-to-end checklist
 1. Confirm `main` has every change you intend to ship and that `CHANGELOG.md` (or your release notes source) is current.
@@ -33,6 +34,7 @@ This runbook walks through publishing a tagged release that ships refreshed JRE 
 ### 3. Finalise version bumps
 - Ensure every version bump is committed (for example in `swain_cli/__init__.py`, CLI help text, and documentation).
 - Update `Formula/swain_cli.rb` with the new version plus the per-platform download URLs + SHA-256 values once the PyInstaller binaries are uploaded.
+  - Recommended: run `python scripts/bump-formula.py vX.Y.Z --write` (or omit `--write` to preview).
 - Stage the updated checksums and `ASSET_BASE` if assets moved.
 - Commit with a message like `Release vX.Y.Z`.
 
@@ -55,7 +57,9 @@ Pushing the tag triggers `release.yml` automatically.
      - `swain_cli-windows-x86_64.exe`
      Each binary also ships with a matching `.sha256` file (e.g. `swain_cli-linux-x86_64.sha256`).
   4. `release-assets` also uploads the installer scripts as `install.sh` and `install.ps1` (defaults to installing the tagged version).
+  5. `release-assets` optionally creates detached GPG signatures (`.asc`) for every asset when `GPG_PRIVATE_KEY` is present.
 - **`ci.yml`** runs on every push/PR; double-check the latest run before cutting the tag.
+- **`container.yml`** builds and publishes a GHCR image on tags (and manual dispatch). The image pre-warms the embedded toolchain so CI jobs can start generating immediately.
 
 ### 6. Configure Trusted Publishing (one-time)
 Set this up once in PyPI, then all future tags publish automatically without secrets.
@@ -80,7 +84,7 @@ Export `TWINE_USERNAME=__token__` and `TWINE_PASSWORD=<pypi-token>` (or configur
 
 ### 8. Verify the release
 1. Wait for `release.yml` to succeed.
-2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached.
+2. Inspect the tagged GitHub Release and confirm all JRE archives plus `.sha256` files are attached (and `.asc` signature files when signing is enabled).
 3. Optionally download an archive (e.g. `swain_cli-jre-linux-x86_64.tar.gz`) and verify the checksum locally.
 4. Install the freshly published package in a clean environment either as a binary (no Python):
    - macOS/Linux: `curl -fsSL https://github.com/takifouhal/swain_cli/releases/latest/download/install.sh | bash`

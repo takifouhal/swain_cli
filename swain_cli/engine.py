@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
+import posixpath
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import textwrap
 import time
+import zipfile
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import httpx
 import pooch
@@ -39,11 +44,13 @@ from .constants import (
     JRE_MARKER_FILENAME,
     PINNED_GENERATOR_SHA256,
     PINNED_GENERATOR_VERSION,
+    VERIFY_SIGNATURES_ENV_VAR,
     JREAsset,
 )
 from .errors import CLIError
 from .http import describe_http_error
-from .utils import format_cli_command
+from .signatures import verify_gpg_signature
+from .utils import format_cli_command, redact
 
 
 @dataclass(frozen=True)
@@ -342,6 +349,15 @@ def asset_base_url() -> str:
     return (os.environ.get(ASSET_BASE_ENV_VAR) or ASSET_BASE).rstrip("/")
 
 
+def _env_truthy(name: str) -> bool:
+    value = (os.environ.get(name) or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _signature_verification_enabled() -> bool:
+    return _env_truthy(VERIFY_SIGNATURES_ENV_VAR)
+
+
 @lru_cache()
 def get_platform_info() -> PlatformInfo:
     system = normalize_os(platform.system())
@@ -381,6 +397,68 @@ def cache_root(*, create: bool = True) -> Path:
     return root
 
 
+_CACHE_LOCK_FILENAME = ".swain_cli_cache.lock"
+
+
+def cache_lock_path() -> Path:
+    return cache_root(create=True) / _CACHE_LOCK_FILENAME
+
+
+@contextmanager
+def cache_lock(*, timeout_seconds: float = 60.0, stale_after_seconds: float = 60.0 * 60.0 * 2) -> Any:
+    """
+    Coarse lock for cache mutations (JRE + jar downloads/extraction).
+
+    Uses an atomic create (O_EXCL). If a lock appears stale (mtime older than
+    stale_after_seconds), it is removed.
+    """
+    lock_path = cache_lock_path()
+    started = time.monotonic()
+    fd: Optional[int] = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age >= stale_after_seconds:
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                continue
+            if (time.monotonic() - started) >= timeout_seconds:
+                raise CLIError(
+                    f"timed out waiting for cache lock: {lock_path} "
+                    f"(waited {timeout_seconds:.1f}s)"
+                ) from None
+            time.sleep(0.2)
+
+    try:
+        assert fd is not None
+        payload = f"pid={os.getpid()} started={time.time():.0f}\n".encode("utf-8")
+        try:
+            os.write(fd, payload)
+        except OSError:
+            pass
+        yield
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
 def jre_install_dir(*, create: bool = True) -> Path:
     info = get_platform_info()
     path = cache_root(create=create) / "jre" / f"{info.os_name}-{info.arch}"
@@ -407,6 +485,11 @@ def get_jre_asset() -> JREAsset:
     info = get_platform_info()
     asset = JRE_ASSETS.get(info.key)
     if not asset:
+        if info.os_name == "windows" and info.arch == "arm64":
+            fallback = JRE_ASSETS.get(("windows", "x86_64"))
+            if fallback:
+                log("windows arm64 detected; using x86_64 embedded JRE under emulation")
+                return fallback
         raise CLIError(
             f"unsupported platform {info.os_name}/{info.arch}; install Java and use --engine system"
         )
@@ -475,9 +558,110 @@ def _verify_sha256(path: Path, expected: Optional[str]) -> None:
         raise CLIError(f"SHA-256 mismatch for {path.name}; expected {expected}, got {digest}")
 
 
+def _digest(path: Path, algorithm: str) -> str:
+    algo = (algorithm or "").lower().strip()
+    if algo not in {"sha256", "sha512"}:
+        raise CLIError(f"unsupported checksum algorithm: {algorithm}")
+    hasher = hashlib.new(algo)
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _verify_digest(path: Path, algorithm: str, expected: Optional[str]) -> None:
+    if not expected:
+        return
+    digest = _digest(path, algorithm)
+    if digest.lower() != expected.lower():
+        raise CLIError(
+            f"{algorithm.upper()} mismatch for {path.name}; expected {expected}, got {digest}"
+        )
+
+
+def _parse_checksum_text(text: str, algorithm: str) -> str:
+    algo = (algorithm or "").lower().strip()
+    if algo == "sha256":
+        pattern = re.compile(r"\b([A-Fa-f0-9]{64})\b")
+    elif algo == "sha512":
+        pattern = re.compile(r"\b([A-Fa-f0-9]{128})\b")
+    else:
+        raise CLIError(f"unsupported checksum algorithm: {algorithm}")
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        match = pattern.search(line)
+        if match:
+            return match.group(1).lower()
+    raise CLIError(f"checksum text did not contain a valid {algo} digest")
+
+
+def fetch_maven_checksum(version: str) -> Tuple[str, str]:
+    jar_name = f"openapi-generator-cli-{version}.jar"
+    base_url = (
+        "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/"
+        f"{version}/{jar_name}"
+    )
+    downloads = downloads_dir()
+    for algorithm in ("sha512", "sha256"):
+        suffix = f".{algorithm}"
+        url = f"{base_url}{suffix}"
+        filename = f"{jar_name}{suffix}"
+        try:
+            checksum_path = Path(
+                pooch.retrieve(
+                    url=url,
+                    path=downloads,
+                    fname=filename,
+                    known_hash=None,
+                    downloader=HTTPX_DOWNLOADER,
+                )
+            )
+        except Exception:
+            continue
+        try:
+            content = checksum_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            digest = _parse_checksum_text(content, algorithm)
+        except CLIError:
+            continue
+        return algorithm, digest
+    raise CLIError(
+        f"unable to fetch checksum for OpenAPI Generator {version} from Maven Central; "
+        "re-run with --no-verify to bypass verification"
+    )
+
+
 def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False) -> Path:
     downloads = downloads_dir()
     target = downloads / asset_name
+
+    def verify_signature(path: Path) -> None:
+        if not _signature_verification_enabled():
+            return
+        base = asset_base_url()
+        signature_name = f"{asset_name}.asc"
+        try:
+            signature_path = Path(
+                pooch.retrieve(
+                    url=f"{base}/{signature_name}",
+                    path=downloads,
+                    fname=signature_name,
+                    known_hash=None,
+                    downloader=HTTPX_DOWNLOADER,
+                )
+            )
+        except Exception as exc:
+            raise CLIError(
+                f"signature verification enabled but failed to download {signature_name}: {exc}"
+            ) from exc
+        verify_gpg_signature(path, signature_path)
+
     if force and target.exists():
         target.unlink()
     if target.exists() and not force:
@@ -486,12 +670,13 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
         except CLIError:
             target.unlink()
         else:
+            verify_signature(target)
             return target
 
     known_hash = f"sha256:{sha256}" if sha256 else None
     base = asset_base_url()
     try:
-        return Path(
+        downloaded = Path(
             pooch.retrieve(
                 url=f"{base}/{asset_name}",
                 path=downloads,
@@ -500,6 +685,8 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
                 downloader=partial(HTTPX_DOWNLOADER, progressbar=True),
             )
         )
+        verify_signature(downloaded)
+        return downloaded
     except (CLIError, ValueError, OSError) as exc:
         raise CLIError(f"failed to download embedded JRE asset {asset_name}: {exc}") from exc
 
@@ -525,10 +712,178 @@ def write_jre_marker(runtime_dir: Path, sha256: str) -> None:
 
 def extract_archive(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.unpack_archive(str(archive), str(dest))
-    except (shutil.ReadError, ValueError) as exc:
-        raise CLIError(f"unsupported archive format for {archive.name}") from exc
+
+    def normalize_member_path(member: str) -> str:
+        normalized = (member or "").replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        if not normalized:
+            return ""
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+            raise CLIError(
+                f"archive entry contains an absolute path: {member!r} ({archive.name})"
+            )
+        parts = [part for part in normalized.split("/") if part not in {"", "."}]
+        if any(part == ".." for part in parts):
+            raise CLIError(
+                f"archive entry attempts path traversal: {member!r} ({archive.name})"
+            )
+        return "/".join(parts)
+
+    def ensure_safe_parents(parts: List[str]) -> Path:
+        current = dest
+        for part in parts:
+            current = current / part
+            if current.exists():
+                if current.is_symlink():
+                    raise CLIError(
+                        f"refusing to extract into symlinked directory {current} ({archive.name})"
+                    )
+                if not current.is_dir():
+                    raise CLIError(
+                        f"refusing to extract into non-directory {current} ({archive.name})"
+                    )
+                continue
+            current.mkdir()
+        return current
+
+    def validate_within_dest(relative_posix: str) -> Path:
+        rel_path = Path(*[p for p in relative_posix.split("/") if p])
+        target = dest / rel_path
+        dest_real = dest.resolve()
+        try:
+            target_real = target.resolve()
+        except FileNotFoundError:
+            # Resolve the parent that does exist (best-effort). Path traversal is
+            # already prevented by normalize_member_path.
+            target_real = (dest_real / rel_path)
+        if dest_real != target_real and dest_real not in target_real.parents:
+            raise CLIError(
+                f"archive entry escapes destination: {relative_posix!r} ({archive.name})"
+            )
+        return target
+
+    suffix = archive.name.lower()
+    if suffix.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                for info in zf.infolist():
+                    entry = normalize_member_path(info.filename)
+                    if not entry:
+                        continue
+                    if info.is_dir() or info.filename.endswith("/"):
+                        ensure_safe_parents(entry.split("/"))
+                        continue
+                    target = validate_within_dest(entry)
+                    ensure_safe_parents(entry.split("/")[:-1])
+                    if target.exists() and target.is_symlink():
+                        raise CLIError(
+                            f"refusing to overwrite symlink {target} ({archive.name})"
+                        )
+                    with zf.open(info, "r") as src, target.open("wb") as out:
+                        shutil.copyfileobj(src, out)
+                    mode = (info.external_attr >> 16) & 0o777
+                    if mode:
+                        try:
+                            os.chmod(target, mode)
+                        except OSError:
+                            pass
+            return
+        except zipfile.BadZipFile as exc:
+            raise CLIError(f"unsupported archive format for {archive.name}") from exc
+
+    if any(suffix.endswith(ext) for ext in (".tar.gz", ".tgz", ".tar")):
+        try:
+            with tarfile.open(archive, mode="r:*") as tf:
+                for member in tf.getmembers():
+                    entry = normalize_member_path(member.name)
+                    if not entry:
+                        continue
+                    target = validate_within_dest(entry)
+                    parent_parts = entry.split("/")[:-1]
+                    ensure_safe_parents(parent_parts)
+
+                    if member.isdir():
+                        ensure_safe_parents(entry.split("/"))
+                        continue
+
+                    if member.issym():
+                        linkname = (member.linkname or "").replace("\\", "/").strip()
+                        if not linkname:
+                            continue
+                        if linkname.startswith("/") or re.match(r"^[A-Za-z]:", linkname):
+                            raise CLIError(
+                                f"refusing to extract absolute symlink target {linkname!r} ({archive.name})"
+                            )
+                        combined = posixpath.normpath(
+                            posixpath.join(posixpath.dirname(entry), linkname)
+                        )
+                        if combined.startswith("..") or combined == "..":
+                            raise CLIError(
+                                f"refusing to extract symlink escaping destination: {entry!r} -> {linkname!r} ({archive.name})"
+                            )
+                        if target.exists():
+                            target.unlink()
+                        try:
+                            os.symlink(linkname, target)
+                        except (NotImplementedError, OSError) as exc:
+                            raise CLIError(
+                                f"failed to create symlink for {entry!r}: {exc}"
+                            ) from exc
+                        continue
+
+                    if member.islnk():
+                        linkname = (member.linkname or "").replace("\\", "/").strip()
+                        if not linkname:
+                            continue
+                        if linkname.startswith("/") or re.match(r"^[A-Za-z]:", linkname):
+                            raise CLIError(
+                                f"refusing to extract absolute hardlink target {linkname!r} ({archive.name})"
+                            )
+                        combined = posixpath.normpath(linkname)
+                        if combined.startswith("..") or combined == "..":
+                            raise CLIError(
+                                f"refusing to extract hardlink escaping destination: {entry!r} -> {linkname!r} ({archive.name})"
+                            )
+                        source = validate_within_dest(combined)
+                        if not source.exists():
+                            raise CLIError(
+                                f"hardlink target missing while extracting {entry!r} ({archive.name})"
+                            )
+                        if target.exists():
+                            target.unlink()
+                        try:
+                            os.link(source, target)
+                        except OSError as exc:
+                            raise CLIError(
+                                f"failed to create hardlink for {entry!r}: {exc}"
+                            ) from exc
+                        continue
+
+                    if not member.isreg():
+                        raise CLIError(
+                            f"unsupported archive entry type for {entry!r} ({archive.name})"
+                        )
+
+                    if target.exists() and target.is_symlink():
+                        raise CLIError(
+                            f"refusing to overwrite symlink {target} ({archive.name})"
+                        )
+                    file_obj = tf.extractfile(member)
+                    if file_obj is None:
+                        continue
+                    with file_obj as src, target.open("wb") as out:
+                        shutil.copyfileobj(src, out)
+                    if member.mode:
+                        try:
+                            os.chmod(target, member.mode & 0o777)
+                        except OSError:
+                            pass
+            return
+        except tarfile.TarError as exc:
+            raise CLIError(f"unsupported archive format for {archive.name}") from exc
+
+    raise CLIError(f"unsupported archive format for {archive.name}")
 
 
 def normalize_runtime_dir(root: Path) -> None:
@@ -564,29 +919,32 @@ def find_embedded_java(root: Path) -> Optional[Path]:
 
 
 def ensure_embedded_jre(force: bool = False) -> Path:
-    asset = get_jre_asset()
-    expected_sha = resolve_asset_sha256(asset)
-    target_dir = jre_install_dir()
+    with cache_lock():
+        asset = get_jre_asset()
+        expected_sha = resolve_asset_sha256(asset)
+        target_dir = jre_install_dir()
 
-    if not force:
-        java_exec = find_embedded_java(target_dir)
-        marker_value = read_jre_marker(target_dir)
-        if java_exec and marker_value == expected_sha:
-            return target_dir
+        if not force:
+            java_exec = find_embedded_java(target_dir)
+            marker_value = read_jre_marker(target_dir)
+            if java_exec and marker_value == expected_sha:
+                return target_dir
 
-    archive_path = fetch_asset_file(asset.filename, expected_sha, force=force)
+        archive_path = fetch_asset_file(asset.filename, expected_sha, force=force)
 
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
 
-    extract_archive(archive_path, target_dir)
-    normalize_runtime_dir(target_dir)
-    java_path = find_embedded_java(target_dir)
-    if not java_path:
-        raise CLIError("embedded JRE installation did not produce a usable java executable")
-    write_jre_marker(target_dir, expected_sha)
-    return target_dir
+        extract_archive(archive_path, target_dir)
+        normalize_runtime_dir(target_dir)
+        java_path = find_embedded_java(target_dir)
+        if not java_path:
+            raise CLIError(
+                "embedded JRE installation did not produce a usable java executable"
+            )
+        write_jre_marker(target_dir, expected_sha)
+        return target_dir
 
 
 def resolve_generator_jar(version: Optional[str], *, allow_download: bool = True) -> Path:
@@ -604,35 +962,50 @@ def resolve_generator_jar(version: Optional[str], *, allow_download: bool = True
         if allow_download:
             return ensure_generator_jar(PINNED_GENERATOR_VERSION)
         raise CLIError(
-            "OpenAPI Generator jar missing; run 'swain_cli engine update-jar --version 7.6.0'"
+            "OpenAPI Generator jar missing; run"
+            f" 'swain_cli engine update-jar --version {PINNED_GENERATOR_VERSION}'"
         )
     raise CLIError(
         f"OpenAPI Generator {chosen} is not cached; run 'swain_cli engine update-jar --version {chosen}'"
     )
 
 
-def ensure_generator_jar(version: str) -> Path:
-    jar_path = jar_cache_dir() / version / f"openapi-generator-cli-{version}.jar"
-    jar_path.parent.mkdir(parents=True, exist_ok=True)
-    if jar_path.exists():
-        return jar_path
-    url = (
-        "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/"
-        f"{version}/openapi-generator-cli-{version}.jar"
-    )
-    known_hash = (
-        f"sha256:{PINNED_GENERATOR_SHA256}" if version == PINNED_GENERATOR_VERSION else None
-    )
-    target = Path(
-        pooch.retrieve(
-            url=url,
-            path=jar_path.parent,
-            fname=jar_path.name,
-            known_hash=known_hash,
-            downloader=partial(HTTPX_DOWNLOADER, progressbar=True),
+def ensure_generator_jar(version: str, *, verify: bool = True) -> Path:
+    with cache_lock():
+        jar_path = jar_cache_dir() / version / f"openapi-generator-cli-{version}.jar"
+        jar_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_algo: Optional[str] = None
+        expected_digest: Optional[str] = None
+
+        if version == PINNED_GENERATOR_VERSION:
+            expected_algo = "sha256"
+            expected_digest = PINNED_GENERATOR_SHA256
+        elif verify:
+            expected_algo, expected_digest = fetch_maven_checksum(version)
+
+        if jar_path.exists():
+            if verify and expected_algo and expected_digest:
+                _verify_digest(jar_path, expected_algo, expected_digest)
+            return jar_path
+        url = (
+            "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/"
+            f"{version}/openapi-generator-cli-{version}.jar"
         )
-    )
-    return target
+        known_hash = None
+        if verify and expected_algo and expected_digest:
+            known_hash = f"{expected_algo}:{expected_digest}"
+        target = Path(
+            pooch.retrieve(
+                url=url,
+                path=jar_path.parent,
+                fname=jar_path.name,
+                known_hash=known_hash,
+                downloader=partial(HTTPX_DOWNLOADER, progressbar=True),
+            )
+        )
+        if verify and expected_algo and expected_digest:
+            _verify_digest(target, expected_algo, expected_digest)
+        return target
 
 
 def list_cached_jars() -> List[str]:
@@ -715,6 +1088,8 @@ def run_openapi_generator(
     engine: str,
     generator_args: Sequence[str],
     java_opts: Sequence[str],
+    *,
+    stream: bool = True,
 ) -> Tuple[int, str]:
     if engine not in {"embedded", "system"}:
         raise CLIError(f"unknown engine '{engine}'")
@@ -735,7 +1110,7 @@ def run_openapi_generator(
         java_cmd = java_exec
         env = os.environ.copy()
     cmd = [java_cmd, *java_options, "-jar", str(jar), *generator_args]
-    log(f"exec {' '.join(cmd)}")
+    log(f"exec {redact(format_cli_command(cmd))}")
     proc = subprocess.Popen(
         cmd,
         env=env,
@@ -763,7 +1138,8 @@ def run_openapi_generator(
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            sys.stdout.write(line)
+            if stream:
+                sys.stdout.write(line)
             capture(line)
         proc.stdout.close()
         proc.wait()
@@ -778,7 +1154,7 @@ def handle_list_generators(args: SimpleNamespace) -> int:
     jar = resolve_generator_jar(args.generator_version)
     resolved_java_opts = resolve_java_opts(getattr(args, "java_opts", []))
     java_opts = resolved_java_opts.options
-    log(f"java options: {format_cli_command(java_opts)}")
+    log(f"java options: {redact(format_cli_command(java_opts))}")
     rc, _ = run_openapi_generator(jar, args.engine, ["list"], java_opts)
     if rc != 0:
         log_error("openapi-generator list failed")
@@ -804,9 +1180,183 @@ def handle_engine_install_jre(args: SimpleNamespace) -> int:
 
 
 def handle_engine_update_jar(args: SimpleNamespace) -> int:
-    ensure_generator_jar(args.version)
+    ensure_generator_jar(args.version, verify=not getattr(args, "no_verify", False))
     log(f"cached OpenAPI Generator {args.version}")
     return 0
+
+
+def handle_engine_paths(args: SimpleNamespace) -> int:
+    info = get_platform_info()
+    payload = {
+        "platform": {"os": info.os_name, "arch": info.arch},
+        "cache_root": str(cache_root(create=False)),
+        "downloads_dir": str(downloads_dir(create=False)),
+        "jar_cache_dir": str(jar_cache_dir(create=False)),
+        "jre_install_dir": str(jre_install_dir(create=False)),
+        "schema_cache_dir": str(cache_root(create=False) / "schemas"),
+    }
+    if getattr(args, "json", False):
+        indent = 2 if getattr(args, "pretty", False) else None
+        print(json.dumps(payload, indent=indent, sort_keys=True))
+        return 0
+    print(f"cache_root: {payload['cache_root']}")
+    print(f"downloads_dir: {payload['downloads_dir']}")
+    print(f"jar_cache_dir: {payload['jar_cache_dir']}")
+    print(f"jre_install_dir: {payload['jre_install_dir']}")
+    print(f"schema_cache_dir: {payload['schema_cache_dir']}")
+    return 0
+
+
+def _delete_path(path: Path) -> Optional[str]:
+    try:
+        if not path.exists():
+            return None
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+def handle_engine_clean(args: SimpleNamespace) -> int:
+    force = bool(getattr(args, "force", False))
+    selected_any = any(
+        bool(getattr(args, name, False))
+        for name in ("downloads", "jars", "jre", "schemas", "all")
+    )
+    clean_downloads = bool(getattr(args, "all", False)) or bool(
+        getattr(args, "downloads", False)
+    )
+    clean_jars = bool(getattr(args, "all", False)) or bool(getattr(args, "jars", False))
+    clean_jre = bool(getattr(args, "all", False)) or bool(getattr(args, "jre", False))
+    clean_schemas = bool(getattr(args, "all", False)) or bool(
+        getattr(args, "schemas", False)
+    )
+    if not selected_any:
+        clean_downloads = True
+
+    targets: List[Path] = []
+    if clean_downloads:
+        targets.append(downloads_dir(create=False))
+    if clean_jars:
+        targets.append(jar_cache_dir(create=False))
+    if clean_jre:
+        targets.append(jre_install_dir(create=False))
+    if clean_schemas:
+        targets.append(cache_root(create=False) / "schemas")
+
+    payload: Dict[str, Any] = {
+        "dry_run": not force,
+        "targets": [str(path) for path in targets],
+        "deleted": [],
+        "errors": [],
+    }
+
+    if not force:
+        if getattr(args, "json", False):
+            indent = 2 if getattr(args, "pretty", False) else None
+            print(json.dumps(payload, indent=indent, sort_keys=True))
+            return 0
+        print("engine clean (dry-run):")
+        for target in targets:
+            print(f"- would delete: {target}")
+        print("re-run with --force to apply")
+        return 0
+
+    for target in targets:
+        err = _delete_path(target)
+        if err:
+            payload["errors"].append({"path": str(target), "error": err})
+        else:
+            payload["deleted"].append(str(target))
+
+    if getattr(args, "json", False):
+        indent = 2 if getattr(args, "pretty", False) else None
+        print(json.dumps(payload, indent=indent, sort_keys=True))
+    else:
+        for deleted in payload["deleted"]:
+            print(f"deleted: {deleted}")
+        for record in payload["errors"]:
+            log_error(f"failed to delete {record['path']}: {record['error']}")
+    return 0 if not payload["errors"] else 1
+
+
+def _version_key(value: str) -> Tuple[int, int, int, str]:
+    parts = (value or "").split(".")
+    nums: List[int] = []
+    for part in parts[:3]:
+        try:
+            nums.append(int(part))
+        except ValueError:
+            nums.append(-1)
+    while len(nums) < 3:
+        nums.append(-1)
+    return (nums[0], nums[1], nums[2], value)
+
+
+def handle_engine_prune_jars(args: SimpleNamespace) -> int:
+    keep = int(getattr(args, "keep", 3) or 0)
+    if keep < 0:
+        raise CLIError("--keep must be >= 0")
+    force = bool(getattr(args, "force", False))
+
+    root = jar_cache_dir(create=False)
+    if not root.exists():
+        print("no cached jars to prune")
+        return 0
+
+    entries: List[Tuple[str, Path]] = []
+    for version_dir in root.iterdir():
+        if not version_dir.is_dir():
+            continue
+        version = version_dir.name
+        jar = version_dir / f"openapi-generator-cli-{version}.jar"
+        if jar.exists():
+            entries.append((version, version_dir))
+
+    entries.sort(key=lambda item: _version_key(item[0]))
+    keep_set = {version for version, _ in entries[-keep:]} if keep else set()
+    prune = [path for version, path in entries if version not in keep_set]
+
+    payload: Dict[str, Any] = {
+        "dry_run": not force,
+        "keep": keep,
+        "kept_versions": sorted(keep_set, key=_version_key),
+        "targets": [str(path) for path in prune],
+        "deleted": [],
+        "errors": [],
+    }
+
+    if not force:
+        if getattr(args, "json", False):
+            indent = 2 if getattr(args, "pretty", False) else None
+            print(json.dumps(payload, indent=indent, sort_keys=True))
+            return 0
+        print("engine prune-jars (dry-run):")
+        for target in prune:
+            print(f"- would delete: {target}")
+        print(f"kept versions: {', '.join(payload['kept_versions']) or 'none'}")
+        print("re-run with --force to apply")
+        return 0
+
+    for target in prune:
+        err = _delete_path(target)
+        if err:
+            payload["errors"].append({"path": str(target), "error": err})
+        else:
+            payload["deleted"].append(str(target))
+
+    if getattr(args, "json", False):
+        indent = 2 if getattr(args, "pretty", False) else None
+        print(json.dumps(payload, indent=indent, sort_keys=True))
+    else:
+        for deleted in payload["deleted"]:
+            print(f"deleted: {deleted}")
+        for record in payload["errors"]:
+            log_error(f"failed to delete {record['path']}: {record['error']}")
+    return 0 if not payload["errors"] else 1
 
 
 def handle_engine_use_system(_: SimpleNamespace) -> int:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Sequence, Union
+from typing import Any, Callable, List, Optional, Sequence, Union
 
 import questionary
 
@@ -68,3 +68,10 @@ def prompt_select(prompt: str, choices: Sequence[Any]) -> Any:
     if result is None:
         raise InteractionAborted()
     return result
+
+
+def prompt_multi_select(prompt: str, choices: Sequence[Any]) -> List[Any]:
+    result = questionary.checkbox(prompt, choices=choices).ask()
+    if result is None:
+        raise InteractionAborted()
+    return list(result)

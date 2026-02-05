@@ -1,26 +1,26 @@
 class SwainCli < Formula
   desc "Zero-setup SDK generator built on top of OpenAPI Generator"
   homepage "https://github.com/takifouhal/swain_cli"
-  version "0.3.10"
+  version "0.3.14"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.10/swain_cli-macos-arm64"
-      sha256 "aa14d5c1b0af6531c3b86e10a4e043210334b6f8b4bff9b63655bdcf18275793"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-macos-arm64"
+      sha256 "d69bd7e223ad4599b151dc8b9f6910979bdc35f02daef7065c77c2835d93ecbd"
     else
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.10/swain_cli-macos-x86_64"
-      sha256 "42b4891ed26364a9dda3689a6e56ee3cf95d45666755dfd429b928ab7a40a4cb"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-macos-x86_64"
+      sha256 "c3d78d824631640c3ff79460cd8e79324093da9b997eb1676673c973cdd52bab"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.10/swain_cli-linux-arm64"
-      sha256 "4b51a99f7f2f1e23780402cdb150154b2b2f6d67d36ba15fae0cb4763c1c36f3"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-linux-arm64"
+      sha256 "083d10800794b9927dec75070c5c887af0fb1a4bf1640a32c109c96fdcf0af3a"
     else
-      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.10/swain_cli-linux-x86_64"
-      sha256 "3bcf62a418748470eec0464e184441e0cb83947245da680290252419ec3928a9"
+      url "https://github.com/takifouhal/swain_cli/releases/download/v0.3.14/swain_cli-linux-x86_64"
+      sha256 "851726966e5b804aac0c8132523d9246fab70fe02a01d406a12f92669830ec2c"
     end
   end
 

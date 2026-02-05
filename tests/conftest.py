@@ -10,6 +10,8 @@ import pytest
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
+import swain_cli.constants as constants
+
 
 class MemoryKeyring(KeyringBackend):
     priority = 1
@@ -40,6 +42,12 @@ def memory_keyring() -> None:
         keyring.set_keyring(original)
 
 
+@pytest.fixture(autouse=True)
+def isolated_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(constants.CONFIG_ENV_VAR, str(tmp_path / "config.toml"))
+    monkeypatch.setenv(constants.CACHE_ENV_VAR, str(tmp_path / "cache"))
+
+
 class FakeResponse:
     def __init__(
         self,
@@ -51,6 +59,7 @@ class FakeResponse:
         reason: str = "OK",
     ) -> None:
         self.url = url
+        self.method = "GET"
         self.status_code = status_code
         self.content = content
         self._json_data = json_data
@@ -67,7 +76,7 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            request = httpx.Request("GET", self.url)
+            request = httpx.Request(self.method, self.url)
             raise httpx.HTTPStatusError(
                 "error",
                 request=request,
@@ -86,24 +95,38 @@ class FakeClient:
     def __exit__(self, *exc: Any) -> bool:
         return False
 
-    def _next_response(self, url: Any) -> FakeResponse:
+    def _next_response(self, method: str, url: Any) -> FakeResponse:
         if not self._responses:
             raise AssertionError("unexpected request")
         response = self._responses.pop(0)
         assert response.url == str(url)
+        response.method = method
+        return response
+
+    def request(
+        self,
+        method: str,
+        url: Any,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        params: Any = None,
+        json: Any = None,
+    ) -> FakeResponse:
+        response = self._next_response(method.upper(), url)
+        self.calls.append((method.upper(), str(url), headers or {}, params, json))
         return response
 
     def get(
         self, url: Any, *, headers: Optional[Dict[str, str]] = None, params: Any = None, json: Any = None
     ) -> FakeResponse:
-        response = self._next_response(url)
+        response = self._next_response("GET", url)
         self.calls.append(("GET", str(url), headers or {}, params, json))
         return response
 
     def post(
         self, url: Any, *, headers: Optional[Dict[str, str]] = None, params: Any = None, json: Any = None
     ) -> FakeResponse:
-        response = self._next_response(url)
+        response = self._next_response("POST", url)
         self.calls.append(("POST", str(url), headers or {}, params, json))
         return response
 
@@ -127,4 +150,3 @@ def make_jwt():
         return f"{header}.{body}.{signature}"
 
     return _make
-

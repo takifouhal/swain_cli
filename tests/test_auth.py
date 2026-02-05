@@ -146,12 +146,57 @@ def test_auth_logout_removes_token():
 
 def test_auth_status_prefers_env(monkeypatch, capfd):
     monkeypatch.setenv(constants.AUTH_TOKEN_ENV_VAR, "env-token-value")
+    monkeypatch.delenv(constants.AUTH_TOKEN_FILE_ENV_VAR, raising=False)
     assert auth.handle_auth_status(SimpleNamespace()) == 0
     out, err = capfd.readouterr()
     assert "environment variable" in out
     assert "env-token-value" not in out
     assert "effective token" in out
     assert err == ""
+
+
+def test_resolve_auth_token_reads_token_file(monkeypatch, tmp_path):
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-token\n", encoding="utf-8")
+    monkeypatch.delenv(constants.AUTH_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(constants.AUTH_TOKEN_FILE_ENV_VAR, str(token_file))
+    assert auth.resolve_auth_token() == "file-token"
+
+
+def test_auth_status_reports_token_file(monkeypatch, tmp_path, capfd):
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-token\n", encoding="utf-8")
+    monkeypatch.delenv(constants.AUTH_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(constants.AUTH_TOKEN_FILE_ENV_VAR, str(token_file))
+    assert auth.handle_auth_status(SimpleNamespace()) == 0
+    out, err = capfd.readouterr()
+    assert "token file" in out
+    assert "file-token" not in out
+    assert err == ""
+
+
+def test_handle_auth_refresh_updates_token(monkeypatch, fake_client, fake_response):
+    auth.persist_auth_token("old-access", "old-refresh")
+
+    response = fake_response(
+        "https://api.example.com/auth/refresh",
+        json_data={"token": "new-access", "refresh_token": "new-refresh"},
+        content=b"{}",
+    )
+
+    def fake_http_client(**kwargs):
+        return fake_client([response])
+
+    monkeypatch.delenv(constants.AUTH_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.delenv(constants.AUTH_TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.setattr(auth.httpx, "Client", fake_http_client)
+
+    args = SimpleNamespace(auth_base_url="https://api.example.com")
+    assert auth.handle_auth_refresh(args) == 0
+
+    state = auth.load_auth_state()
+    assert state.access_token == "new-access"
+    assert state.refresh_token == "new-refresh"
 
 
 def test_persist_auth_token_falls_back_to_chunked_storage(monkeypatch):
