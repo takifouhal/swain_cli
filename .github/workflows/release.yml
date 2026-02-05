@@ -263,12 +263,15 @@ jobs:
           chmod +x dist/install.sh
 
       - name: Sign release assets (optional, GPG)
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
+          if [[ -z "${GPG_PRIVATE_KEY:-}" ]]; then
+            echo "GPG_PRIVATE_KEY not configured; skipping signing."
+            exit 0
+          fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           while IFS= read -r -d '' file; do
             if [[ "$file" == *.asc ]]; then
