@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.15
+- Add named generation profiles plus `profiles` CLI helpers.
+- Add generation planning flags (`gen --plan-only/--dry-run`) to preview resolved runs without executing OpenAPI Generator.
+- Fix `auth refresh` base URL derivation when only `crudsql_url` is configured.
+
 ## v0.3.14
 - Fix Windows keyring failures when storing large RBAC-expanded JWTs by falling back to chunked credential storage.
 
