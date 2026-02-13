@@ -13,7 +13,8 @@ from types import SimpleNamespace
 from typing import Optional
 
 from .console import log
-from .engine import HTTPX_DOWNLOADER, get_platform_info
+from .constants import VERIFY_SIGNATURES_ENV_VAR
+from .engine import HTTPX_DOWNLOADER, _env_truthy, get_platform_info
 from .errors import CLIError
 from .signatures import verify_gpg_signature
 
@@ -254,6 +255,8 @@ def handle_self_update(args: SimpleNamespace) -> int:
     verify = not bool(getattr(args, "no_verify", False))
     dry_run = bool(getattr(args, "dry_run", False))
     verify_signatures = bool(getattr(args, "verify_signatures", False))
+    if not verify_signatures and _env_truthy(VERIFY_SIGNATURES_ENV_VAR):
+        verify_signatures = True
     try:
         self_update(
             tag=tag,

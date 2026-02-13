@@ -7,6 +7,7 @@ import swain_cli.constants as constants
 import swain_cli.generator as generator
 import swain_cli.swain_api as swain_api
 from swain_cli.args import GenArgs
+from swain_cli.plugins import PluginSchemaResult
 
 
 def test_typescript_alias():
@@ -427,6 +428,9 @@ def test_handle_gen_plan_only_json_is_stdout_clean_and_creates_no_dirs(monkeypat
     assert generator.handle_gen(args) == 0
     captured, err = capfd.readouterr()
     payload = json.loads(captured)
+    assert set(payload.keys()) == {"mode", "schema", "settings", "engine", "generator", "runs"}
+    assert isinstance(payload["runs"], list)
+    assert set(payload["runs"][0].keys()) == {"language", "resolved_language", "out_dir", "generator_args"}
     assert payload["mode"] == "plan-only"
     assert payload["schema"]["mode"] == "explicit"
     assert payload["runs"][0]["resolved_language"] == "python"
@@ -536,3 +540,59 @@ def test_handle_gen_fails_when_hook_fails(monkeypatch, tmp_path):
         run_hooks=True,
     )
     assert generator.handle_gen(args) == 13
+
+
+def test_ensure_generator_arg_defaults_respects_tokenized_global_property_docs_disable():
+    args = ["--global-property", constants.GLOBAL_PROPERTY_DISABLE_DOCS]
+    result = generator.ensure_generator_arg_defaults(args)
+
+    # The user-provided two-token form should be respected; don't append a second
+    # docs-disable global-property flag.
+    assert f"--global-property={constants.GLOBAL_PROPERTY_DISABLE_DOCS}" not in result
+    assert "--global-property" in result
+    assert constants.GLOBAL_PROPERTY_DISABLE_DOCS in result
+    assert constants.SKIP_OPERATION_EXAMPLE_FLAG in result
+
+
+def test_handle_gen_does_not_delete_plugin_schema_when_not_owned(monkeypatch, tmp_path):
+    schema_file = tmp_path / "plugin_schema.json"
+    schema_file.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        generator,
+        "resolve_schema_with_plugins",
+        lambda *a, **k: PluginSchemaResult(schema=str(schema_file), temp_path=None),
+    )
+    monkeypatch.setattr(generator, "resolve_generator_jar", lambda version: tmp_path / "jar.jar")
+
+    def fake_run(jar, engine, cmd, java_opts):
+        schema_path = Path(cmd[cmd.index("-i") + 1])
+        assert schema_path == schema_file
+        assert schema_path.exists()
+        return 0, ""
+
+    monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
+
+    args = GenArgs(
+        generator_version=None,
+        engine="embedded",
+        schema=None,
+        crudsql_url=None,
+        swain_base_url=None,
+        swain_project_id=None,
+        swain_connection_id=None,
+        swain_tenant_id=None,
+        out=str(tmp_path / "out"),
+        languages=["python"],
+        config=None,
+        templates=None,
+        additional_properties=[],
+        generator_arg=[],
+        system_properties=[],
+        skip_validate_spec=False,
+        verbose=False,
+        java_opts=[],
+    )
+
+    assert generator.handle_gen(args) == 0
+    assert schema_file.exists()

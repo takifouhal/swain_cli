@@ -25,6 +25,7 @@ from .constants import (
     KEYRING_USERNAME,
     TENANT_ID_ENV_VAR,
 )
+from .context import AppContext, default_http_client_factory
 from .errors import CLIError
 from .http import (
     describe_http_error,
@@ -305,7 +306,11 @@ def swain_request_headers(
 
 
 def _fetch_account_name_for_tenant(
-    base_url: str, token: str, tenant_id: Union[str, int]
+    base_url: str,
+    token: str,
+    tenant_id: Union[str, int],
+    *,
+    ctx: Optional[AppContext] = None,
 ) -> Optional[str]:
     normalized = normalize_tenant_id(tenant_id)
     if not normalized:
@@ -314,7 +319,8 @@ def _fetch_account_name_for_tenant(
     url = swain_url(base_url, f"Account/{normalized}")
     headers = request_headers(token, tenant_id=normalized)
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         try:
             response = request_with_retries(client, "GET", url, headers=headers)
             if response.status_code == 404:
@@ -348,6 +354,7 @@ def determine_swain_tenant_id(
     provided: Optional[Union[str, int]],
     *,
     allow_prompt: bool,
+    ctx: Optional[AppContext] = None,
 ) -> str:
     explicit = normalize_tenant_id(provided)
     if explicit:
@@ -362,7 +369,7 @@ def determine_swain_tenant_id(
     if candidates:
         if len(candidates) == 1:
             tenant_id = candidates[0]
-            account_name = _fetch_account_name_for_tenant(base_url, token, tenant_id)
+            account_name = _fetch_account_name_for_tenant(base_url, token, tenant_id, ctx=ctx)
             if account_name:
                 log(
                     "using tenant"
@@ -374,7 +381,7 @@ def determine_swain_tenant_id(
         if allow_prompt:
             ordered_choices = []
             for candidate in candidates:
-                name = _fetch_account_name_for_tenant(base_url, token, candidate)
+                name = _fetch_account_name_for_tenant(base_url, token, candidate, ctx=ctx)
                 title = f"{name} (#{candidate})" if name else str(candidate)
                 ordered_choices.append(
                     questionary.Choice(title=title, value=str(candidate))
@@ -396,7 +403,13 @@ def determine_swain_tenant_id(
     )
 
 
-def swain_login_with_credentials(base_url: str, username: str, password: str) -> Dict[str, Any]:
+def swain_login_with_credentials(
+    base_url: str,
+    username: str,
+    password: str,
+    *,
+    ctx: Optional[AppContext] = None,
+) -> Dict[str, Any]:
     if not username.strip():
         raise CLIError("username is required for credential login")
     if not password:
@@ -405,7 +418,8 @@ def swain_login_with_credentials(base_url: str, username: str, password: str) ->
     headers = request_headers(content_type="application/json")
     payload = {"username": username, "password": password}
     timeout = http_timeout()
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         try:
             response = client.post(login_url, headers=headers, json=payload)
             response.raise_for_status()
@@ -422,7 +436,12 @@ def swain_login_with_credentials(base_url: str, username: str, password: str) ->
     return data
 
 
-def swain_refresh_with_token(base_url: str, refresh_token: str) -> Dict[str, Any]:
+def swain_refresh_with_token(
+    base_url: str,
+    refresh_token: str,
+    *,
+    ctx: Optional[AppContext] = None,
+) -> Dict[str, Any]:
     token_value = refresh_token.strip()
     if not token_value:
         raise CLIError("refresh token is empty; run 'swain_cli auth login'")
@@ -442,7 +461,8 @@ def swain_refresh_with_token(base_url: str, refresh_token: str) -> Dict[str, Any
     timeout = http_timeout()
     headers = request_headers(content_type="application/json")
     last_error: Optional[str] = None
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
+    with client_factory(timeout) as client:
         for path in candidates:
             url = swain_url(base_url, path, enforce_api_prefix=False)
             for payload in payloads:

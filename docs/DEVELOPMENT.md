@@ -18,6 +18,12 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - No CLI behavior changes unless explicitly called out.
 - No network calls in unit tests (patch `httpx.Client`).
 
+## Invariants
+- `gen --plan-only` must remain side-effect free: no network, no downloads, no directory creation.
+- Temp-file ownership: only delete schema files when swain_cli explicitly owns them (e.g., `ResolvedSchema.owned_temp_path`). Plugins must only set `PluginSchemaResult.owned_temp_path`/`temp_path` for owned temporary files.
+- Post-generation hooks must never run unless explicitly enabled (`--run-hooks` or config `run_hooks=true`).
+- HTTP boundaries: keep HTTP in dedicated modules (`auth`, `swain_api`, `crudsql`, engine downloads). Prefer `AppContext.http_client_factory` injection in tests; avoid real network calls in unit tests.
+
 ## Module boundaries (high level)
 - `swain_cli/cli.py`: Typer commands + wiring (no prompt/HTTP details).
 - `swain_cli/interactive.py`: interactive wizard UX (no HTTP details).

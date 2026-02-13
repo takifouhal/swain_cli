@@ -258,15 +258,28 @@ def config_template() -> str:
     )
 
 
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(content, encoding=encoding)
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise CLIError(f"failed to write config file {path}: {exc}") from exc
+
+
 def write_default_config(path: Optional[Path] = None, *, force: bool) -> Path:
     config_path = path or resolve_config_path()
     if config_path.exists() and not force:
         raise CLIError(f"config file already exists: {config_path} (use --force to overwrite)")
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(config_template(), encoding="utf-8")
     except OSError as exc:
         raise CLIError(f"failed to write config file {config_path}: {exc}") from exc
+    _atomic_write_text(config_path, config_template())
     return config_path
 
 
@@ -487,7 +500,7 @@ def upsert_profile(
     rendered = dump_config_toml(raw)
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(rendered, encoding="utf-8")
     except OSError as exc:
         raise CLIError(f"failed to write config file {config_path}: {exc}") from exc
+    _atomic_write_text(config_path, rendered)
     return config_path

@@ -24,7 +24,13 @@ class PluginInfo:
 @dataclass(frozen=True)
 class PluginSchemaResult:
     schema: str
+    # Only set this if swain_cli should delete the schema file after generation.
     temp_path: Optional[Path] = None
+    # Preferred alias for clarity; temp_path remains for backward compatibility.
+    owned_temp_path: Optional[Path] = None
+
+    def effective_owned_temp_path(self) -> Optional[Path]:
+        return self.owned_temp_path or self.temp_path
 
 
 class SwainCLIPlugin(Protocol):

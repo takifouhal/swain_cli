@@ -10,13 +10,11 @@ import posixpath
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 import tarfile
 import textwrap
 import time
 import zipfile
-from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache, partial
@@ -50,7 +48,12 @@ from .constants import (
 from .errors import CLIError
 from .http import describe_http_error
 from .signatures import verify_gpg_signature
+from .subprocess_runner import run_subprocess
 from .utils import format_cli_command, redact
+
+# ---------------------------------------------------------------------------
+# Data Types
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,11 @@ class EngineSnapshot:
 class ResolvedJavaOptions:
     options: List[str]
     provided: bool
+
+
+# ---------------------------------------------------------------------------
+# Downloader
+# ---------------------------------------------------------------------------
 
 
 class HTTPXDownloader:
@@ -345,6 +353,11 @@ class _DownloadProgress:
         sys.stderr.flush()
 
 
+# ---------------------------------------------------------------------------
+# Environment + Platform
+# ---------------------------------------------------------------------------
+
+
 def asset_base_url() -> str:
     return (os.environ.get(ASSET_BASE_ENV_VAR) or ASSET_BASE).rstrip("/")
 
@@ -383,6 +396,11 @@ def normalize_arch(machine: str) -> str:
     if value in {"arm64", "aarch64"}:
         return "arm64"
     return value
+
+
+# ---------------------------------------------------------------------------
+# Cache Paths + Locks
+# ---------------------------------------------------------------------------
 
 
 def cache_root(*, create: bool = True) -> Path:
@@ -479,6 +497,11 @@ def downloads_dir(*, create: bool = True) -> Path:
     if create:
         path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# ---------------------------------------------------------------------------
+# JRE Assets + Checksums + Signatures
+# ---------------------------------------------------------------------------
 
 
 def get_jre_asset() -> JREAsset:
@@ -691,6 +714,11 @@ def fetch_asset_file(asset_name: str, sha256: Optional[str], force: bool = False
         raise CLIError(f"failed to download embedded JRE asset {asset_name}: {exc}") from exc
 
 
+# ---------------------------------------------------------------------------
+# Archive Extraction + Marker Files
+# ---------------------------------------------------------------------------
+
+
 def read_jre_marker(runtime_dir: Path) -> Optional[str]:
     marker = runtime_dir / JRE_MARKER_FILENAME
     try:
@@ -886,6 +914,11 @@ def extract_archive(archive: Path, dest: Path) -> None:
     raise CLIError(f"unsupported archive format for {archive.name}")
 
 
+# ---------------------------------------------------------------------------
+# Embedded JRE
+# ---------------------------------------------------------------------------
+
+
 def normalize_runtime_dir(root: Path) -> None:
     java_path = root / "bin" / java_binary_name()
     if java_path.exists():
@@ -945,6 +978,11 @@ def ensure_embedded_jre(force: bool = False) -> Path:
             )
         write_jre_marker(target_dir, expected_sha)
         return target_dir
+
+
+# ---------------------------------------------------------------------------
+# Generator Jar Management
+# ---------------------------------------------------------------------------
 
 
 def resolve_generator_jar(version: Optional[str], *, allow_download: bool = True) -> Path:
@@ -1022,6 +1060,11 @@ def list_cached_jars() -> List[str]:
     return entries
 
 
+# ---------------------------------------------------------------------------
+# Snapshots + Reporting
+# ---------------------------------------------------------------------------
+
+
 def collect_engine_snapshot(generator_version: Optional[str]) -> EngineSnapshot:
     info = get_platform_info()
     runtime_dir = jre_install_dir(create=False)
@@ -1069,6 +1112,11 @@ def emit_engine_snapshot(
     log(f"system java: {snapshot.system_java if snapshot.system_java else 'not found'}")
 
 
+# ---------------------------------------------------------------------------
+# Java Options
+# ---------------------------------------------------------------------------
+
+
 def resolve_java_opts(cli_opts: Sequence[str]) -> ResolvedJavaOptions:
     result: List[str] = []
     env_opts = os.environ.get(JAVA_OPTS_ENV_VAR)
@@ -1081,6 +1129,11 @@ def resolve_java_opts(cli_opts: Sequence[str]) -> ResolvedJavaOptions:
     if not result:
         result.extend(DEFAULT_JAVA_OPTS)
     return ResolvedJavaOptions(result, provided)
+
+
+# ---------------------------------------------------------------------------
+# Generator Execution
+# ---------------------------------------------------------------------------
 
 
 def run_openapi_generator(
@@ -1111,43 +1164,12 @@ def run_openapi_generator(
         env = os.environ.copy()
     cmd = [java_cmd, *java_options, "-jar", str(jar), *generator_args]
     log(f"exec {redact(format_cli_command(cmd))}")
-    proc = subprocess.Popen(
-        cmd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    max_capture_chars = 200_000
-    captured: deque[str] = deque()
-    captured_size = 0
+    return run_subprocess(cmd, env=env, stream=stream, max_capture_chars=200_000)
 
-    def capture(line: str) -> None:
-        nonlocal captured_size
-        if len(line) > max_capture_chars:
-            captured.clear()
-            line = line[-max_capture_chars:]
-            captured_size = 0
-        captured.append(line)
-        captured_size += len(line)
-        while captured and captured_size > max_capture_chars:
-            removed = captured.popleft()
-            captured_size -= len(removed)
 
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            if stream:
-                sys.stdout.write(line)
-            capture(line)
-        proc.stdout.close()
-        proc.wait()
-    except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait()
-        raise
-    return proc.returncode, "".join(captured)
+# ---------------------------------------------------------------------------
+# CLI Handlers
+# ---------------------------------------------------------------------------
 
 
 def handle_list_generators(args: SimpleNamespace) -> int:

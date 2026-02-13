@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from typing import Any, Callable, Dict, Optional, Union
 
 import httpx
 
 from .constants import HTTP_TIMEOUT_SECONDS, TENANT_HEADER_NAME
-from .utils import safe_str
+from .utils import redact, safe_str
 from .version import USER_AGENT
 
 
@@ -47,10 +48,10 @@ def request_headers(
 
 
 def describe_http_error(exc: httpx.HTTPError) -> str:
-    detail = ""
+    result = ""
     if isinstance(exc, httpx.HTTPStatusError):
         response = exc.response
-        detail = f"{response.status_code} {response.reason_phrase}".strip()
+        result = f"{response.status_code} {response.reason_phrase}".strip()
         body = (getattr(response, "text", "") or "").strip()
         if body:
             extracted: Optional[str] = None
@@ -59,16 +60,14 @@ def describe_http_error(exc: httpx.HTTPError) -> str:
             except (json.JSONDecodeError, ValueError):
                 data = None
             if isinstance(data, dict):
-                extracted = safe_str(
-                    data.get("detail") or data.get("message") or data.get("error")
-                )
+                extracted = safe_str(data.get("detail") or data.get("message") or data.get("error"))
             if extracted:
                 suffix = extracted.strip()
             else:
                 suffix = body.splitlines()[0].strip()
             if suffix:
-                detail = f"{detail}: {suffix}" if detail else suffix
-        return detail
+                result = f"{result}: {suffix}" if result else suffix
+        return redact(result)
 
     request = getattr(exc, "request", None)
     target = ""
@@ -99,7 +98,7 @@ def describe_http_error(exc: httpx.HTTPError) -> str:
 
     if target and target not in summary:
         summary = f"{summary} ({target})"
-    return summary
+    return redact(summary)
 
 
 def request_with_retries(
@@ -115,11 +114,10 @@ def request_with_retries(
     backoff_max: float = 8.0,
     sleep: Callable[[float], None] = time.sleep,
     retry_post: bool = False,
+    jitter: bool = False,
 ) -> httpx.Response:
     method_upper = (method or "").upper().strip() or "GET"
-    allow_retry = method_upper in {"GET", "HEAD"} or (
-        retry_post and method_upper == "POST"
-    )
+    allow_retry = method_upper in {"GET", "HEAD"} or (retry_post and method_upper == "POST")
     retryable_statuses = {408, 429, 500, 502, 503, 504}
 
     def should_retry_exc(exc: httpx.HTTPError) -> bool:
@@ -142,7 +140,10 @@ def request_with_retries(
         if attempt <= 0:
             return 0.0
         delay = backoff_initial * (2 ** (attempt - 1))
-        return min(delay, backoff_max)
+        delay = min(delay, backoff_max)
+        if jitter and delay > 0:
+            delay = random.uniform(0.0, delay)
+        return delay
 
     attempt = 0
     while True:
@@ -163,12 +164,9 @@ def request_with_retries(
                 sleep(delay)
             continue
 
-        if (
-            allow_retry
-            and response.status_code in retryable_statuses
-            and attempt < max_attempts
-        ):
+        if allow_retry and response.status_code in retryable_statuses and attempt < max_attempts:
             delay = retry_delay(attempt, response)
+            response.close()
             if delay > 0:
                 sleep(delay)
             continue

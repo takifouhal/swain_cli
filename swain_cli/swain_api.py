@@ -20,7 +20,7 @@ from .http import (
     request_with_retries,
 )
 from .urls import swain_url
-from .utils import as_dict, pick, safe_int, safe_str, write_bytes_to_tempfile
+from .utils import as_dict, pick, redact, safe_int, safe_str, write_bytes_to_tempfile
 
 
 @dataclass(frozen=True)
@@ -386,7 +386,7 @@ def fetch_swain_connection_schema(
             try:
                 log(
                     "fetching connection dynamic swagger directly from"
-                    f" {direct_url} (connection {connection.id})"
+                    f" {redact(direct_url)} (connection {connection.id})"
                 )
                 response = request_with_retries(
                     client,
@@ -415,12 +415,12 @@ def fetch_swain_connection_schema(
             if idx == 0:
                 log(
                     "fetching connection dynamic swagger from"
-                    f" {schema_url} (connection {connection.id})"
+                    f" {redact(str(schema_url))} (connection {connection.id})"
                 )
             else:
                 log(
                     "connection swagger endpoint returned 404;"
-                    f" retrying with legacy route: {schema_url}"
+                    f" retrying with legacy route: {redact(str(schema_url))}"
                 )
             try:
                 response = request_with_retries(

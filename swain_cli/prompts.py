@@ -29,24 +29,20 @@ def prompt_text(
             verdict = validate(value)
             return True if verdict is None else verdict
 
-    question = questionary.text(
-        prompt,
-        default=default or "",
-        validate=wrapped_validate,
-    )
-    result = question.ask()
-    if result is None:
-        raise InteractionAborted()
-    stripped = result.strip()
-    if not stripped and not allow_empty:
-        log_error("please enter a value")
-        return prompt_text(
+    while True:
+        question = questionary.text(
             prompt,
-            default=default,
-            validate=validate,
-            allow_empty=allow_empty,
+            default=default or "",
+            validate=wrapped_validate,
         )
-    return stripped
+        result = question.ask()
+        if result is None:
+            raise InteractionAborted()
+        stripped = result.strip()
+        if not stripped and not allow_empty:
+            log_error("please enter a value")
+            continue
+        return stripped
 
 
 def prompt_confirm(prompt: str, *, default: bool) -> bool:

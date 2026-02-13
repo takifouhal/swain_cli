@@ -120,7 +120,7 @@ Use the `auth` subcommands to prepare credentials before generating SDKs against
 - **Custom asset base (advanced)** — set `SWAIN_CLI_ASSET_BASE` to override where embedded JRE archives are downloaded from.
 - **System engine** — add `--engine system` (or export `SWAIN_CLI_ENGINE=system`) to run with whatever `java` is already on `PATH`.
 - **Offline use** — prime the cache via `swain_cli engine install-jre` and `swain_cli engine update-jar --version 7.6.0` (or run `swain_cli list-generators` once) or copy an existing cache directory between machines.
-- **Integrity checks** — downloads are verified by checksum by default. Set `SWAIN_CLI_VERIFY_SIGNATURES=1` to additionally verify GPG signatures for release assets when available (requires `gpg`).
+- **Integrity checks** — downloads are verified by checksum by default. Set `SWAIN_CLI_VERIFY_SIGNATURES=1` to additionally verify GPG signatures for release assets when available (requires `gpg`). This also defaults `swain_cli self-update` to signature verification.
 
 ## Running in CI
 1. Install the package (`pipx install swain_cli` or `pip install swain_cli`).

@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .args import GenArgs
 from .auth import determine_swain_tenant_id, require_auth_token
@@ -36,6 +35,7 @@ from .engine import (
 )
 from .errors import CLIError
 from .openapi_spec import inject_base_url
+from .plan import GenPlan, PlanRun
 from .plugins import resolve_schema_with_plugins
 from .schema_cache import (
     get_cached_schema_path,
@@ -43,6 +43,7 @@ from .schema_cache import (
     put_cached_schema,
     schema_cache_key,
 )
+from .subprocess_runner import run_subprocess
 from .swain_api import (
     SwainConnection,
     fetch_swain_connection_by_id,
@@ -72,43 +73,7 @@ def _split_hook_command(command: str) -> List[str]:
 
 
 def _run_hook(argv: Sequence[str], *, cwd: Path, stream: bool = True) -> Tuple[int, str]:
-    proc = subprocess.Popen(
-        list(argv),
-        cwd=str(cwd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    max_capture_chars = 200_000
-    captured: List[str] = []
-    captured_size = 0
-
-    def capture(line: str) -> None:
-        nonlocal captured_size
-        if len(line) > max_capture_chars:
-            captured.clear()
-            line = line[-max_capture_chars:]
-            captured_size = 0
-        captured.append(line)
-        captured_size += len(line)
-        while captured and captured_size > max_capture_chars:
-            removed = captured.pop(0)
-            captured_size -= len(removed)
-
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            if stream:
-                sys.stdout.write(line)
-            capture(line)
-        proc.stdout.close()
-        proc.wait()
-    except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait()
-        raise
-    return proc.returncode, "".join(captured)
+    return run_subprocess(list(argv), cwd=cwd, stream=stream, max_capture_chars=200_000)
 
 
 def _hooks_for_language(args: GenArgs, language: str, resolved_language: str) -> List[str]:
@@ -159,12 +124,14 @@ def _global_property_mentions_docs(value: str) -> bool:
 
 
 def generator_args_disable_docs(generator_args: Sequence[str]) -> bool:
-    for arg in generator_args:
-        if not arg.startswith("--global-property"):
-            continue
-        _, _, value = arg.partition("=")
-        if _global_property_mentions_docs(value):
-            return True
+    for idx, part in enumerate(generator_args):
+        if part == "--global-property":
+            if idx + 1 < len(generator_args) and _global_property_mentions_docs(generator_args[idx + 1]):
+                return True
+        elif part.startswith("--global-property="):
+            _, _, value = part.partition("=")
+            if _global_property_mentions_docs(value):
+                return True
     return False
 
 
@@ -264,8 +231,11 @@ def ensure_additional_property_defaults(properties: Sequence[str]) -> List[str]:
 
 @dataclass(frozen=True)
 class ResolvedSchema:
+    """Schema resolved for generation."""
+
     schema: str
-    temp_path: Optional[Path] = None
+    # Only set this if swain_cli should delete the schema file after generation.
+    owned_temp_path: Optional[Path] = None
     connection: Optional[SwainConnection] = None
     tenant_id: Optional[str] = None
 
@@ -383,7 +353,7 @@ def resolve_schema_for_generation(
     if plugin_result is not None:
         return ResolvedSchema(
             schema=plugin_result.schema,
-            temp_path=plugin_result.temp_path,
+            owned_temp_path=plugin_result.effective_owned_temp_path(),
         )
     if args.schema:
         return ResolvedSchema(schema=resolve_input_schema(args.schema))
@@ -401,12 +371,21 @@ def resolve_schema_for_generation(
         else "fetch the CrudSQL swagger document"
     )
     token = require_auth_token(purpose)
-    tenant_id = determine_swain_tenant_id(
-        swain_base,
-        token,
-        args.swain_tenant_id,
-        allow_prompt=False,
-    )
+    if ctx is not None:
+        tenant_id = determine_swain_tenant_id(
+            swain_base,
+            token,
+            args.swain_tenant_id,
+            allow_prompt=False,
+            ctx=ctx,
+        )
+    else:
+        tenant_id = determine_swain_tenant_id(
+            swain_base,
+            token,
+            args.swain_tenant_id,
+            allow_prompt=False,
+        )
 
     if use_swain_discovery:
         connection = resolve_swain_connection(
@@ -440,7 +419,7 @@ def resolve_schema_for_generation(
                 )
                 return ResolvedSchema(
                     schema=str(temp_schema),
-                    temp_path=temp_schema,
+                    owned_temp_path=temp_schema,
                     connection=connection,
                     tenant_id=tenant_id,
                 )
@@ -473,7 +452,7 @@ def resolve_schema_for_generation(
         )
         return ResolvedSchema(
             schema=str(temp_schema),
-            temp_path=temp_schema,
+            owned_temp_path=temp_schema,
             connection=connection,
             tenant_id=tenant_id,
         )
@@ -495,7 +474,7 @@ def resolve_schema_for_generation(
                 suffix=".json",
                 description="cached CrudSQL schema",
             )
-            return ResolvedSchema(schema=str(temp_schema), temp_path=temp_schema, tenant_id=tenant_id)
+            return ResolvedSchema(schema=str(temp_schema), owned_temp_path=temp_schema, tenant_id=tenant_id)
 
     if ctx is not None:
         temp_schema = fetch_crudsql_schema(
@@ -515,7 +494,7 @@ def resolve_schema_for_generation(
             put_cached_schema(crudsql_cache_key, temp_schema.read_bytes())
         except CLIError as exc:
             log_error(f"failed to write schema cache: {exc}")
-    return ResolvedSchema(schema=str(temp_schema), temp_path=temp_schema, tenant_id=tenant_id)
+    return ResolvedSchema(schema=str(temp_schema), owned_temp_path=temp_schema, tenant_id=tenant_id)
 
 
 def _chosen_generator_version(args: GenArgs) -> str:
@@ -583,10 +562,10 @@ def _describe_schema_plan_only(args: GenArgs, swain_base: str, crudsql_base: str
     }
 
 
-def _render_plan_text(plan: dict) -> str:
+def _render_plan_text(plan: GenPlan) -> str:
     lines: List[str] = []
     lines.append("swain_cli gen plan")
-    schema = plan.get("schema") or {}
+    schema = plan["schema"]
     lines.append(f"- schema mode: {schema.get('mode')}")
     if "input" in schema:
         lines.append(f"- schema input: {schema.get('input')}")
@@ -605,7 +584,7 @@ def _render_plan_text(plan: dict) -> str:
             f"- crudsql fallback swagger: {schema.get('fallback_dynamic_swagger_url')}"
         )
 
-    settings = plan.get("settings") or {}
+    settings = plan["settings"]
     lines.append(f"- patch base url: {settings.get('patch_base_url')}")
     if settings.get("emit_patched_schema"):
         lines.append(f"- emit schema: {settings.get('emit_patched_schema')}")
@@ -625,22 +604,22 @@ def _render_plan_text(plan: dict) -> str:
     if settings.get("no_schema_cache"):
         lines.append("- schema cache: disabled")
 
-    engine = plan.get("engine") or {}
+    engine = plan["engine"]
     lines.append(f"- engine: {engine.get('mode')}")
-    java = engine.get("java") or {}
+    java = engine["java"]
     lines.append(f"- java: {java.get('command')}")
-    java_opts = engine.get("java_opts") or {}
+    java_opts = engine["java_opts"]
     opts = java_opts.get("options") or []
     lines.append(f"- java opts: {redact(format_cli_command(opts))}")
 
-    gen = plan.get("generator") or {}
+    gen = plan["generator"]
     lines.append(f"- generator version: {gen.get('version')}")
-    jar = gen.get("jar") or {}
+    jar = gen["jar"]
     lines.append(f"- generator jar cached: {jar.get('cached')}")
     if jar.get("path"):
         lines.append(f"- generator jar path: {jar.get('path')}")
 
-    runs = plan.get("runs") or []
+    runs = plan["runs"]
     lines.append(f"- languages: {len(runs)}")
     for run in runs:
         lines.append(
@@ -651,7 +630,7 @@ def _render_plan_text(plan: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _redact_plan(plan: dict) -> dict:
+def _redact_plan(plan: GenPlan) -> dict:
     safe = json.loads(json.dumps(plan))
     settings = safe.get("settings") or {}
     post_hooks = settings.get("post_hooks")
@@ -689,7 +668,7 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
 
     engine_mode = args.engine
     swain_base, crudsql_base = resolve_base_urls(args.swain_base_url, args.crudsql_url)
-    temp_schema: Optional[Path] = None
+    owned_temp_schema: Optional[Path] = None
 
     try:
         chosen_version = _chosen_generator_version(args)
@@ -743,19 +722,19 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
                 ctx=ctx,
             )
             schema_for_cmd = resolved_schema.schema
-            temp_schema = resolved_schema.temp_path
+            owned_temp_schema = resolved_schema.owned_temp_path
             plan_schema = {
                 "mode": "resolved",
                 "schema": schema_for_cmd,
-                "temp_path": str(temp_schema) if temp_schema else None,
+                "temp_path": str(owned_temp_schema) if owned_temp_schema else None,
                 "swain_connection_id": resolved_schema.connection.id if resolved_schema.connection else None,
             }
-            if temp_schema:
+            if owned_temp_schema:
                 base_url = crudsql_base
                 if resolved_schema.connection and resolved_schema.connection.effective_endpoint:
                     base_url = resolved_schema.connection.effective_endpoint
                 if resolved_args.patch_base_url:
-                    patched = inject_base_url(temp_schema, base_url)
+                    patched = inject_base_url(owned_temp_schema, base_url)
                     if patched:
                         plan_schema["patched_base_url"] = patched
                         log(f"patched schema server URL to {patched}")
@@ -765,11 +744,11 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
                 if resolved_args.emit_patched_schema:
                     target = Path(resolved_args.emit_patched_schema).expanduser()
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(temp_schema.read_bytes())
+                    target.write_bytes(owned_temp_schema.read_bytes())
                     plan_schema["emitted_schema"] = str(target)
                     log(f"wrote schema copy to {target}")
-
-        plan: Dict[str, Any] = {
+        runs: List[PlanRun] = []
+        plan: GenPlan = {
             "mode": mode,
             "schema": plan_schema,
             "settings": {
@@ -796,7 +775,7 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
                 "version": chosen_version,
                 "jar": {"path": str(jar_path), "cached": jar_cached},
             },
-            "runs": [],
+            "runs": runs,
         }
 
         for lang in languages:
@@ -841,7 +820,7 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
             max_workers = min(parallel, len(runs))
             log(f"running generation in parallel (workers={max_workers})")
 
-            def run_one(run: dict) -> Tuple[str, int, str]:
+            def run_one(run: PlanRun) -> Tuple[str, int, str]:
                 resolved_lang = run["resolved_language"]
                 target_dir = Path(run["out_dir"])
                 cmd = list(run["generator_args"])
@@ -963,6 +942,6 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
             if hook_rc != 0:
                 return hook_rc
     finally:
-        if temp_schema:
-            temp_schema.unlink(missing_ok=True)
+        if owned_temp_schema:
+            owned_temp_schema.unlink(missing_ok=True)
     return 0

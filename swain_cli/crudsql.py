@@ -18,7 +18,7 @@ from .http import (
     request_with_retries,
 )
 from .urls import crudsql_dynamic_swagger_url
-from .utils import write_bytes_to_tempfile
+from .utils import redact, write_bytes_to_tempfile
 
 
 def crudsql_discover_schema_url(
@@ -74,7 +74,7 @@ def fetch_crudsql_schema(
     ctx: Optional[AppContext] = None,
 ) -> Path:
     schema_url = crudsql_discover_schema_url(base_url, token, tenant_id, ctx=ctx)
-    log(f"fetching CrudSQL schema from {schema_url}")
+    log(f"fetching CrudSQL schema from {redact(schema_url)}")
     headers = request_headers(token, tenant_id=tenant_id)
 
     timeout = http_timeout()
