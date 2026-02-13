@@ -23,6 +23,7 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - Temp-file ownership: only delete schema files when swain_cli explicitly owns them (e.g., `ResolvedSchema.owned_temp_path`). Plugins must only set `PluginSchemaResult.owned_temp_path`/`temp_path` for owned temporary files.
 - Post-generation hooks must never run unless explicitly enabled (`--run-hooks` or config `run_hooks=true`).
 - HTTP boundaries: keep HTTP in dedicated modules (`auth`, `swain_api`, `crudsql`, engine downloads). Prefer `AppContext.http_client_factory` injection in tests; avoid real network calls in unit tests.
+- Supply-chain verification (optional): set `SWAIN_CLI_VERIFY_SIGNATURES=1` to require `.asc` signature verification when downloading OpenAPI Generator jars and embedded engine assets.
 
 ## Module boundaries (high level)
 - `swain_cli/cli.py`: Typer commands + wiring (no prompt/HTTP details).
@@ -31,8 +32,8 @@ Note: the `lint` extra only installs `ruff`/`mypy` on Python 3.9+.
 - `swain_cli/config.py`: TOML config + profiles (no CLI wiring).
 - `swain_cli/context.py`: dependency injection (HTTP client factory, config plumbing).
 - `swain_cli/generator.py`: orchestrates schema resolution + OpenAPI Generator invocation.
-- `swain_cli/engine.py`: embedded JRE/JAR management + subprocess execution.
-- `swain_cli/auth.py`: credential login + token storage (env/keyring) + tenant ID resolution.
+- `swain_cli/engine/`: embedded JRE/JAR management + subprocess execution.
+- `swain_cli/auth/`: credential login + token storage (env/keyring) + tenant ID resolution.
 - `swain_cli/swain_api.py`: Swain project/connection discovery over HTTP.
 - `swain_cli/crudsql.py`: CrudSQL schema discovery + downloads over HTTP.
 - `swain_cli/urls.py`: URL normalization + endpoint building.

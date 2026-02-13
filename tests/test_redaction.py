@@ -6,6 +6,12 @@ def test_redact_masks_kv_secrets():
     assert redact("password: hunter2") == "password:***"
 
 
+def test_redact_masks_json_secrets() -> None:
+    assert redact('{"token": "abc123"}') == '{"token": "***"}'
+    assert redact("{'access_token':'abc'}") == "{'access_token':'***'}"
+    assert redact('{"refresh_token":"def"}') == '{"refresh_token":"***"}'
+
+
 def test_redact_masks_bearer_tokens():
     assert redact("Authorization: Bearer abc.def.ghi") == "Authorization: Bearer ***"
 

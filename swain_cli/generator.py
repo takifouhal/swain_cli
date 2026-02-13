@@ -8,7 +8,7 @@ import shlex
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple, cast
 
 from .args import GenArgs
 from .auth import determine_swain_tenant_id, require_auth_token
@@ -31,11 +31,13 @@ from .engine import (
     jre_install_dir,
     resolve_generator_jar,
     resolve_java_opts,
+    resolve_java_runtime,
     run_openapi_generator,
+    run_openapi_generator_prepared,
 )
 from .errors import CLIError
 from .openapi_spec import inject_base_url
-from .plan import GenPlan, PlanRun
+from .plan import GenPlan, PlanRun, SchemaPlan
 from .plugins import resolve_schema_with_plugins
 from .schema_cache import (
     get_cached_schema_path,
@@ -337,6 +339,35 @@ def resolve_swain_connection(
     return connections[0]
 
 
+def _normalize_cache_base_url(value: str) -> str:
+    return (value or "").rstrip("/")
+
+
+def _maybe_load_cached_schema_tempfile(
+    cache_key: str,
+    ttl_seconds: int,
+    *,
+    log_prefix: str,
+    description: str,
+) -> Optional[Path]:
+    cached = get_cached_schema_path(cache_key, ttl_seconds)
+    if not cached:
+        return None
+    log(f"{log_prefix} ({cached})")
+    return write_bytes_to_tempfile(
+        cached.read_bytes(),
+        suffix=".json",
+        description=description,
+    )
+
+
+def _maybe_write_schema_cache(cache_key: str, schema_path: Path) -> None:
+    try:
+        put_cached_schema(cache_key, schema_path.read_bytes())
+    except CLIError as exc:
+        log_error(f"failed to write schema cache: {exc}")
+
+
 def resolve_schema_for_generation(
     args: GenArgs,
     swain_base: str,
@@ -364,12 +395,15 @@ def resolve_schema_for_generation(
         if ttl_raw:
             cache_ttl_seconds = parse_ttl_seconds(str(ttl_raw))
 
-    use_swain_discovery = args.swain_connection_id is not None or args.swain_project_id is not None
+    use_swain_discovery = (
+        args.swain_connection_id is not None or args.swain_project_id is not None
+    )
     purpose = (
         "fetch the Swain connection swagger document"
         if use_swain_discovery
         else "fetch the CrudSQL swagger document"
     )
+
     token = require_auth_token(purpose)
     if ctx is not None:
         tenant_id = determine_swain_tenant_id(
@@ -387,6 +421,9 @@ def resolve_schema_for_generation(
             allow_prompt=False,
         )
 
+    swain_cache_base = _normalize_cache_base_url(swain_base)
+    crudsql_cache_base = _normalize_cache_base_url(crudsql_base)
+
     if use_swain_discovery:
         connection = resolve_swain_connection(
             swain_base=swain_base,
@@ -403,23 +440,22 @@ def resolve_schema_for_generation(
             cache_key = schema_cache_key(
                 {
                     "kind": "swain_connection",
-                    "swain_base_url": swain_base,
+                    "swain_base_url": swain_cache_base,
                     "tenant_id": tenant_id,
                     "connection_id": connection.id,
                     "build_id": connection.build_id,
                 }
             )
-            cached = get_cached_schema_path(cache_key, cache_ttl_seconds)
-            if cached:
-                log(f"using cached schema for connection {connection.id} ({cached})")
-                temp_schema = write_bytes_to_tempfile(
-                    cached.read_bytes(),
-                    suffix=".json",
-                    description=f"cached schema for connection {connection.id}",
-                )
+            cached_temp = _maybe_load_cached_schema_tempfile(
+                cache_key,
+                cache_ttl_seconds,
+                log_prefix=f"using cached schema for connection {connection.id}",
+                description=f"cached schema for connection {connection.id}",
+            )
+            if cached_temp:
                 return ResolvedSchema(
-                    schema=str(temp_schema),
-                    owned_temp_path=temp_schema,
+                    schema=str(cached_temp),
+                    owned_temp_path=cached_temp,
                     connection=connection,
                     tenant_id=tenant_id,
                 )
@@ -440,10 +476,7 @@ def resolve_schema_for_generation(
                 tenant_id=tenant_id,
             )
         if cache_key is not None:
-            try:
-                put_cached_schema(cache_key, temp_schema.read_bytes())
-            except CLIError as exc:
-                log_error(f"failed to write schema cache: {exc}")
+            _maybe_write_schema_cache(cache_key, temp_schema)
         log(
             "using Swain connection"
             f" {connection.id}"
@@ -462,19 +495,22 @@ def resolve_schema_for_generation(
         crudsql_cache_key = schema_cache_key(
             {
                 "kind": "crudsql",
-                "crudsql_base_url": crudsql_base,
+                "crudsql_base_url": crudsql_cache_base,
                 "tenant_id": tenant_id,
             }
         )
-        cached = get_cached_schema_path(crudsql_cache_key, cache_ttl_seconds)
-        if cached:
-            log(f"using cached schema ({cached})")
-            temp_schema = write_bytes_to_tempfile(
-                cached.read_bytes(),
-                suffix=".json",
-                description="cached CrudSQL schema",
+        cached_temp = _maybe_load_cached_schema_tempfile(
+            crudsql_cache_key,
+            cache_ttl_seconds,
+            log_prefix="using cached schema",
+            description="cached CrudSQL schema",
+        )
+        if cached_temp:
+            return ResolvedSchema(
+                schema=str(cached_temp),
+                owned_temp_path=cached_temp,
+                tenant_id=tenant_id,
             )
-            return ResolvedSchema(schema=str(temp_schema), owned_temp_path=temp_schema, tenant_id=tenant_id)
 
     if ctx is not None:
         temp_schema = fetch_crudsql_schema(
@@ -490,11 +526,13 @@ def resolve_schema_for_generation(
             tenant_id=tenant_id,
         )
     if crudsql_cache_key is not None:
-        try:
-            put_cached_schema(crudsql_cache_key, temp_schema.read_bytes())
-        except CLIError as exc:
-            log_error(f"failed to write schema cache: {exc}")
-    return ResolvedSchema(schema=str(temp_schema), owned_temp_path=temp_schema, tenant_id=tenant_id)
+        _maybe_write_schema_cache(crudsql_cache_key, temp_schema)
+
+    return ResolvedSchema(
+        schema=str(temp_schema),
+        owned_temp_path=temp_schema,
+        tenant_id=tenant_id,
+    )
 
 
 def _chosen_generator_version(args: GenArgs) -> str:
@@ -512,7 +550,7 @@ def _jar_path_for_version(version: str) -> Path:
     )
 
 
-def _describe_schema_plan_only(args: GenArgs, swain_base: str, crudsql_base: str) -> dict:
+def _describe_schema_plan_only(args: GenArgs, swain_base: str, crudsql_base: str) -> SchemaPlan:
     if args.schema:
         schema_value = args.schema
         schema_path = Path(schema_value)
@@ -568,20 +606,20 @@ def _render_plan_text(plan: GenPlan) -> str:
     schema = plan["schema"]
     lines.append(f"- schema mode: {schema.get('mode')}")
     if "input" in schema:
-        lines.append(f"- schema input: {schema.get('input')}")
+        lines.append(f"- schema input: {redact(str(schema.get('input')))}")
     if schema.get("schema"):
-        lines.append(f"- resolved schema: {schema.get('schema')}")
+        lines.append(f"- resolved schema: {redact(str(schema.get('schema')))}")
     if schema.get("patched_base_url"):
-        lines.append(f"- patched base url: {schema.get('patched_base_url')}")
+        lines.append(f"- patched base url: {redact(str(schema.get('patched_base_url')))}")
     if "error" in schema:
-        lines.append(f"- schema error: {schema.get('error')}")
+        lines.append(f"- schema error: {redact(str(schema.get('error')))}")
     if "proxy_urls" in schema:
         lines.append("- swain proxy urls:")
         for url in schema.get("proxy_urls") or []:
-            lines.append(f"  - {url}")
+            lines.append(f"  - {redact(str(url))}")
     if "fallback_dynamic_swagger_url" in schema:
         lines.append(
-            f"- crudsql fallback swagger: {schema.get('fallback_dynamic_swagger_url')}"
+            f"- crudsql fallback swagger: {redact(str(schema.get('fallback_dynamic_swagger_url')))}"
         )
 
     settings = plan["settings"]
@@ -630,7 +668,17 @@ def _render_plan_text(plan: GenPlan) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _redact_plan(plan: GenPlan) -> dict:
+def _redact_plan_value(value: object) -> object:
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [_redact_plan_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_plan_value(item) for key, item in value.items()}
+    return value
+
+
+def _redact_plan(plan: GenPlan) -> GenPlan:
     safe = json.loads(json.dumps(plan))
     settings = safe.get("settings") or {}
     post_hooks = settings.get("post_hooks")
@@ -653,19 +701,325 @@ def _redact_plan(plan: GenPlan) -> dict:
         if isinstance(argv, list):
             run["generator_args"] = redact_cli_args(argv)
     safe["engine"] = engine
-    return safe
+    if isinstance(safe.get("schema"), dict):
+        safe["schema"] = _redact_plan_value(safe["schema"])
+    return cast(GenPlan, safe)
 
 
-def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
+def _determine_gen_mode(args: GenArgs) -> str:
     if args.dry_run and args.plan_only:
         raise CLIError("--dry-run and --plan-only are mutually exclusive")
 
-    mode = "execute"
     if args.plan_only:
-        mode = "plan-only"
-    elif args.dry_run:
-        mode = "dry-run"
+        return "plan-only"
+    if args.dry_run:
+        return "dry-run"
+    return "execute"
 
+
+def _resolve_java_command(engine_mode: str) -> Optional[str]:
+    if engine_mode == "embedded":
+        runtime = jre_install_dir(create=False)
+        embedded = find_embedded_java(runtime)
+        return str(embedded) if embedded else None
+
+    if engine_mode == "system":
+        import shutil
+
+        return shutil.which("java")
+
+    return None
+
+
+def _build_schema_plan_nonexec(
+    args: GenArgs,
+    swain_base: str,
+    crudsql_base: str,
+) -> Tuple[SchemaPlan, str]:
+    plan_schema = _describe_schema_plan_only(args, swain_base, crudsql_base)
+    if args.schema:
+        return plan_schema, args.schema
+
+    fallback = plan_schema.get("fallback_dynamic_swagger_url")
+    if isinstance(fallback, str) and fallback:
+        return plan_schema, fallback
+
+    proxy_urls = plan_schema.get("proxy_urls")
+    if isinstance(proxy_urls, list) and proxy_urls:
+        return plan_schema, str(proxy_urls[0])
+
+    return plan_schema, "<dynamic schema>"
+
+
+def _build_schema_plan_execute(
+    args: GenArgs,
+    swain_base: str,
+    crudsql_base: str,
+    *,
+    ctx: Optional[AppContext],
+) -> Tuple[SchemaPlan, str, Optional[Path]]:
+    resolved_schema = resolve_schema_for_generation(
+        args,
+        swain_base,
+        crudsql_base,
+        ctx=ctx,
+    )
+    schema_for_cmd = resolved_schema.schema
+    owned_temp_schema = resolved_schema.owned_temp_path
+
+    plan_schema: SchemaPlan = {
+        "mode": "resolved",
+        "schema": schema_for_cmd,
+        "temp_path": str(owned_temp_schema) if owned_temp_schema else None,
+        "swain_connection_id": resolved_schema.connection.id if resolved_schema.connection else None,
+    }
+
+    if owned_temp_schema:
+        base_url = crudsql_base
+        if resolved_schema.connection and resolved_schema.connection.effective_endpoint:
+            base_url = resolved_schema.connection.effective_endpoint
+
+        if args.patch_base_url:
+            patched = inject_base_url(owned_temp_schema, base_url)
+            if patched:
+                plan_schema["patched_base_url"] = patched
+                log(f"patched schema server URL to {patched}")
+        else:
+            log("base-url patching disabled; using fetched schema as-is")
+
+        if args.emit_patched_schema:
+            target = Path(args.emit_patched_schema).expanduser()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(owned_temp_schema.read_bytes())
+            plan_schema["emitted_schema"] = str(target)
+            log(f"wrote schema copy to {target}")
+
+    return plan_schema, schema_for_cmd, owned_temp_schema
+
+
+def _build_plan_runs(
+    schema_for_cmd: str,
+    languages: Sequence[str],
+    args: GenArgs,
+    out_dir: Path,
+    *,
+    create: bool,
+) -> List[PlanRun]:
+    runs: List[PlanRun] = []
+    for lang in languages:
+        resolved_lang, target_dir, cmd = build_generate_command(
+            schema_for_cmd,
+            lang,
+            args,
+            out_dir,
+            create=create,
+        )
+        runs.append(
+            {
+                "language": lang,
+                "resolved_language": resolved_lang,
+                "out_dir": str(target_dir),
+                "generator_args": cmd,
+            }
+        )
+    return runs
+
+
+def _emit_plan(plan: GenPlan, args: GenArgs) -> None:
+    if args.plan_format == "json":
+        indent = 2 if args.pretty else None
+        print(json.dumps(_redact_plan(plan), indent=indent, sort_keys=True))
+    else:
+        print(_render_plan_text(plan), end="")
+
+
+def _run_generator_with_oom_retries(
+    run: Callable[[Sequence[str], Sequence[str], bool], Tuple[int, str]],
+    cmd: Sequence[str],
+    java_opts: Sequence[str],
+    *,
+    stream: bool,
+    log_prefix: str = "",
+) -> Tuple[int, str, List[str]]:
+    current_cmd = list(cmd)
+    current_java_opts = list(java_opts)
+    docs_disabled = command_disables_docs(current_cmd)
+    last_output = ""
+
+    prefix = f"{log_prefix}: " if log_prefix else ""
+
+    while True:
+        rc, output = run(current_cmd, current_java_opts, stream)
+        last_output = output
+        if rc == 0:
+            return 0, "", current_java_opts
+
+        oom_detected = any(marker in output for marker in OOM_MARKERS)
+        retried = False
+        if rc != 0 and oom_detected:
+            new_java_opts = replace_heap_option(
+                current_java_opts,
+                FALLBACK_JAVA_HEAP_OPTION,
+            )
+            if new_java_opts != current_java_opts:
+                current_java_opts = new_java_opts
+                log(
+                    f"{prefix}detected OutOfMemoryError; retrying with java options: "
+                    f"{redact(format_cli_command(current_java_opts))}"
+                )
+                retried = True
+            elif not docs_disabled:
+                current_cmd = with_docs_disabled(current_cmd)
+                docs_disabled = True
+                log(
+                    f"{prefix}detected OutOfMemoryError; retrying with OpenAPI Generator docs/tests disabled"
+                )
+                retried = True
+
+        if not retried:
+            return rc, last_output, current_java_opts
+
+
+def _execute_runs_parallel(
+    args: GenArgs,
+    *,
+    jar: Path,
+    engine_mode: str,
+    runs: Sequence[PlanRun],
+    java_opts: Sequence[str],
+    parallel: int,
+) -> int:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    max_workers = min(parallel, len(runs))
+    log(f"running generation in parallel (workers={max_workers})")
+
+    java_cmd, env = resolve_java_runtime(engine_mode)
+
+    def run_generator(
+        cmd: Sequence[str],
+        opts: Sequence[str],
+        stream: bool,
+    ) -> Tuple[int, str]:
+        return run_openapi_generator_prepared(
+            java_cmd,
+            env,
+            jar,
+            cmd,
+            opts,
+            stream=stream,
+        )
+
+    def run_one(run: PlanRun) -> Tuple[str, int, str]:
+        resolved_lang = run["resolved_language"]
+        target_dir = Path(run["out_dir"])
+        cmd = list(run["generator_args"])
+        log(f"generating {resolved_lang} into {target_dir}")
+
+        rc, output, _updated_java_opts = _run_generator_with_oom_retries(
+            run_generator,
+            cmd,
+            java_opts,
+            stream=False,
+            log_prefix=resolved_lang,
+        )
+        if rc == 0:
+            return resolved_lang, 0, ""
+        return resolved_lang, rc, output
+
+    results: List[Tuple[str, int, str]] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(run_one, run) for run in runs]
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    failures = [(lang, rc, output) for (lang, rc, output) in results if rc != 0]
+    if failures:
+        for lang, rc, output in failures:
+            log_error(f"generation failed for {lang} (exit code {rc})")
+            if output:
+                sys.stdout.write(output)
+                if not output.endswith("\n"):
+                    sys.stdout.write("\n")
+        first_rc = failures[0][1]
+        return first_rc if first_rc != 0 else EXIT_CODE_SUBPROCESS
+
+    for run in runs:
+        hook_rc = _run_post_hooks(
+            args,
+            language=run.get("language") or run.get("resolved_language") or "",
+            resolved_language=run.get("resolved_language") or run.get("language") or "",
+            out_dir=Path(run["out_dir"]),
+        )
+        if hook_rc != 0:
+            return hook_rc
+
+    return 0
+
+
+def _execute_runs_sequential(
+    args: GenArgs,
+    *,
+    jar: Path,
+    engine_mode: str,
+    runs: Sequence[PlanRun],
+    java_opts: Sequence[str],
+) -> int:
+    current_java_opts = list(java_opts)
+
+    def run_generator(
+        cmd: Sequence[str],
+        opts: Sequence[str],
+        stream: bool,
+    ) -> Tuple[int, str]:
+        if stream:
+            return run_openapi_generator(
+                jar,
+                engine_mode,
+                cmd,
+                opts,
+            )
+        return run_openapi_generator(
+            jar,
+            engine_mode,
+            cmd,
+            opts,
+            stream=False,
+        )
+
+    for run in runs:
+        resolved_lang = run["resolved_language"]
+        target_dir = Path(run["out_dir"])
+        cmd = list(run["generator_args"])
+
+        log(f"generating {resolved_lang} into {target_dir}")
+
+        rc, _output, updated_java_opts = _run_generator_with_oom_retries(
+            run_generator,
+            cmd,
+            current_java_opts,
+            stream=True,
+        )
+        if rc != 0:
+            log_error(f"generation failed for {resolved_lang} (exit code {rc})")
+            return rc if rc != 0 else EXIT_CODE_SUBPROCESS
+
+        current_java_opts = updated_java_opts
+
+        hook_rc = _run_post_hooks(
+            args,
+            language=run.get("language") or resolved_lang,
+            resolved_language=resolved_lang,
+            out_dir=target_dir,
+        )
+        if hook_rc != 0:
+            return hook_rc
+
+    return 0
+
+
+def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
+    mode = _determine_gen_mode(args)
     engine_mode = args.engine
     swain_base, crudsql_base = resolve_base_urls(args.swain_base_url, args.crudsql_url)
     owned_temp_schema: Optional[Path] = None
@@ -675,15 +1029,7 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
         jar_path = _jar_path_for_version(chosen_version)
         jar_cached = jar_path.exists()
 
-        java_exec: Optional[str] = None
-        if engine_mode == "embedded":
-            runtime = jre_install_dir(create=False)
-            embedded = find_embedded_java(runtime)
-            java_exec = str(embedded) if embedded else None
-        else:
-            import shutil
-
-            java_exec = shutil.which("java")
+        java_exec = _resolve_java_command(engine_mode)
 
         resolved_args = replace(
             args,
@@ -703,51 +1049,28 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
 
         out_dir = Path(resolved_args.out)
 
-        plan_schema: dict
-        schema_for_cmd: str
-
-        if mode == "plan-only":
-            plan_schema = _describe_schema_plan_only(resolved_args, swain_base, crudsql_base)
-            schema_for_cmd = (
-                resolved_args.schema
-                if resolved_args.schema
-                else plan_schema.get("fallback_dynamic_swagger_url")
-                or (plan_schema.get("proxy_urls") or ["<dynamic schema>"])[0]
+        if mode in {"plan-only", "dry-run"}:
+            plan_schema, schema_for_cmd = _build_schema_plan_nonexec(
+                resolved_args,
+                swain_base,
+                crudsql_base,
             )
         else:
-            resolved_schema = resolve_schema_for_generation(
+            plan_schema, schema_for_cmd, owned_temp_schema = _build_schema_plan_execute(
                 resolved_args,
                 swain_base,
                 crudsql_base,
                 ctx=ctx,
             )
-            schema_for_cmd = resolved_schema.schema
-            owned_temp_schema = resolved_schema.owned_temp_path
-            plan_schema = {
-                "mode": "resolved",
-                "schema": schema_for_cmd,
-                "temp_path": str(owned_temp_schema) if owned_temp_schema else None,
-                "swain_connection_id": resolved_schema.connection.id if resolved_schema.connection else None,
-            }
-            if owned_temp_schema:
-                base_url = crudsql_base
-                if resolved_schema.connection and resolved_schema.connection.effective_endpoint:
-                    base_url = resolved_schema.connection.effective_endpoint
-                if resolved_args.patch_base_url:
-                    patched = inject_base_url(owned_temp_schema, base_url)
-                    if patched:
-                        plan_schema["patched_base_url"] = patched
-                        log(f"patched schema server URL to {patched}")
-                else:
-                    log("base-url patching disabled; using fetched schema as-is")
 
-                if resolved_args.emit_patched_schema:
-                    target = Path(resolved_args.emit_patched_schema).expanduser()
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(owned_temp_schema.read_bytes())
-                    plan_schema["emitted_schema"] = str(target)
-                    log(f"wrote schema copy to {target}")
-        runs: List[PlanRun] = []
+        runs = _build_plan_runs(
+            schema_for_cmd,
+            languages,
+            resolved_args,
+            out_dir,
+            create=(mode == "execute"),
+        )
+
         plan: GenPlan = {
             "mode": mode,
             "schema": plan_schema,
@@ -778,170 +1101,43 @@ def handle_gen(args: GenArgs, *, ctx: Optional[AppContext] = None) -> int:
             "runs": runs,
         }
 
-        for lang in languages:
-            resolved_lang, target_dir, cmd = build_generate_command(
-                schema_for_cmd,
-                lang,
-                resolved_args,
-                out_dir,
-                create=(mode == "execute"),
-            )
-            plan["runs"].append(
-                {
-                    "language": lang,
-                    "resolved_language": resolved_lang,
-                    "out_dir": str(target_dir),
-                    "generator_args": cmd,
-                }
-            )
-
         if mode != "execute":
-            if resolved_args.plan_format == "json":
-                indent = 2 if resolved_args.pretty else None
-                print(json.dumps(_redact_plan(plan), indent=indent, sort_keys=True))
-            else:
-                print(_render_plan_text(plan), end="")
+            _emit_plan(plan, resolved_args)
             return 0
 
         jar = resolve_generator_jar(resolved_args.generator_version)
         out_dir.mkdir(parents=True, exist_ok=True)
         log(f"java options: {redact(format_cli_command(java_opts))}")
+
         hooks_configured = bool(getattr(resolved_args, "post_hooks", []) or []) or bool(
             getattr(resolved_args, "post_hooks_by_language", {}) or {}
         )
         if hooks_configured and not getattr(resolved_args, "run_hooks", False):
-            log("post-generation hooks configured but disabled; pass --run-hooks to enable")
-        elif hooks_configured and getattr(resolved_args, "run_hooks", False):
-            log("post-generation hooks enabled; commands will run in generated SDK directories")
-        runs = list(plan["runs"])
-        if parallel > 1 and len(runs) > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            max_workers = min(parallel, len(runs))
-            log(f"running generation in parallel (workers={max_workers})")
-
-            def run_one(run: PlanRun) -> Tuple[str, int, str]:
-                resolved_lang = run["resolved_language"]
-                target_dir = Path(run["out_dir"])
-                cmd = list(run["generator_args"])
-                log(f"generating {resolved_lang} into {target_dir}")
-                current_cmd = list(cmd)
-                current_java_opts = list(java_opts)
-                docs_disabled = command_disables_docs(current_cmd)
-                last_output = ""
-                while True:
-                    rc, output = run_openapi_generator(
-                        jar,
-                        engine_mode,
-                        current_cmd,
-                        current_java_opts,
-                        stream=False,
-                    )
-                    last_output = output
-                    if rc == 0:
-                        return resolved_lang, 0, ""
-                    oom_detected = any(marker in output for marker in OOM_MARKERS)
-                    retried = False
-                    if rc != 0 and oom_detected:
-                        new_java_opts = replace_heap_option(
-                            current_java_opts, FALLBACK_JAVA_HEAP_OPTION
-                        )
-                        if new_java_opts != current_java_opts:
-                            current_java_opts = new_java_opts
-                            log(
-                                f"{resolved_lang}: detected OutOfMemoryError; retrying"
-                                f" with java options: {redact(format_cli_command(current_java_opts))}"
-                            )
-                            retried = True
-                        elif not docs_disabled:
-                            current_cmd = with_docs_disabled(current_cmd)
-                            docs_disabled = True
-                            log(
-                                f"{resolved_lang}: detected OutOfMemoryError; retrying with"
-                                " OpenAPI Generator docs/tests disabled"
-                            )
-                            retried = True
-                    if not retried:
-                        return resolved_lang, rc, last_output
-
-            results: List[Tuple[str, int, str]] = []
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = [pool.submit(run_one, run) for run in runs]
-                for future in as_completed(futures):
-                    results.append(future.result())
-
-            failures = [(lang, rc, output) for (lang, rc, output) in results if rc != 0]
-            if failures:
-                for lang, rc, output in failures:
-                    log_error(f"generation failed for {lang} (exit code {rc})")
-                    if output:
-                        sys.stdout.write(output)
-                        if not output.endswith("\n"):
-                            sys.stdout.write("\n")
-                first_rc = failures[0][1]
-                return first_rc if first_rc != 0 else EXIT_CODE_SUBPROCESS
-            for run in runs:
-                hook_rc = _run_post_hooks(
-                    resolved_args,
-                    language=run.get("language") or run.get("resolved_language") or "",
-                    resolved_language=run.get("resolved_language") or run.get("language") or "",
-                    out_dir=Path(run["out_dir"]),
-                )
-                if hook_rc != 0:
-                    return hook_rc
-            return 0
-
-        for run in runs:
-            resolved_lang = run["resolved_language"]
-            target_dir = Path(run["out_dir"])
-            cmd = list(run["generator_args"])
-            log(f"generating {resolved_lang} into {target_dir}")
-            current_cmd = list(cmd)
-            current_java_opts = list(java_opts)
-            docs_disabled = command_disables_docs(current_cmd)
-            while True:
-                rc, output = run_openapi_generator(
-                    jar,
-                    engine_mode,
-                    current_cmd,
-                    current_java_opts,
-                )
-                if rc == 0:
-                    break
-                oom_detected = any(marker in output for marker in OOM_MARKERS)
-                retried = False
-                if rc != 0 and oom_detected:
-                    new_java_opts = replace_heap_option(
-                        current_java_opts, FALLBACK_JAVA_HEAP_OPTION
-                    )
-                    if new_java_opts != current_java_opts:
-                        current_java_opts = new_java_opts
-                        log(
-                            "detected OutOfMemoryError; retrying"
-                            f" with java options: {redact(format_cli_command(current_java_opts))}"
-                        )
-                        retried = True
-                    elif not docs_disabled:
-                        current_cmd = with_docs_disabled(current_cmd)
-                        docs_disabled = True
-                        log(
-                            "detected OutOfMemoryError; retrying with"
-                            " OpenAPI Generator docs/tests disabled"
-                        )
-                        retried = True
-                if not retried:
-                    log_error(f"generation failed for {resolved_lang} (exit code {rc})")
-                    return rc if rc != 0 else EXIT_CODE_SUBPROCESS
-            java_opts = current_java_opts
-            hook_rc = _run_post_hooks(
-                resolved_args,
-                language=run.get("language") or resolved_lang,
-                resolved_language=resolved_lang,
-                out_dir=target_dir,
+            log(
+                "post-generation hooks configured but disabled; pass --run-hooks to enable"
             )
-            if hook_rc != 0:
-                return hook_rc
+        elif hooks_configured and getattr(resolved_args, "run_hooks", False):
+            log(
+                "post-generation hooks enabled; commands will run in generated SDK directories"
+            )
+
+        if parallel > 1 and len(runs) > 1:
+            return _execute_runs_parallel(
+                resolved_args,
+                jar=jar,
+                engine_mode=engine_mode,
+                runs=runs,
+                java_opts=java_opts,
+                parallel=parallel,
+            )
+
+        return _execute_runs_sequential(
+            resolved_args,
+            jar=jar,
+            engine_mode=engine_mode,
+            runs=runs,
+            java_opts=java_opts,
+        )
     finally:
         if owned_temp_schema:
             owned_temp_schema.unlink(missing_ok=True)
-    return 0

@@ -4,6 +4,10 @@ from typing import Any, Dict, Optional
 import pytest
 
 import swain_cli.auth as auth
+import swain_cli.auth.handlers as auth_handlers
+import swain_cli.auth.remote as auth_remote
+import swain_cli.auth.tenant as auth_tenant
+import swain_cli.auth.tokens as auth_tokens
 import swain_cli.constants as constants
 from swain_cli.errors import CLIError
 
@@ -20,7 +24,7 @@ def test_determine_swain_tenant_id_env(monkeypatch, make_jwt):
 def test_determine_swain_tenant_id_single_claim(monkeypatch, make_jwt):
     token = make_jwt({"tenant_ids": [987]})
     monkeypatch.delenv(constants.TENANT_ID_ENV_VAR, raising=False)
-    monkeypatch.setattr(auth, "_fetch_account_name_for_tenant", lambda *a, **k: None)
+    monkeypatch.setattr(auth_tenant, "_fetch_account_name_for_tenant", lambda *a, **k: None)
     result = auth.determine_swain_tenant_id(
         constants.DEFAULT_SWAIN_BASE_URL, token, None, allow_prompt=False
     )
@@ -46,7 +50,7 @@ def test_swain_login_with_credentials_success(monkeypatch, fake_client, fake_res
     def fake_http_client(**kwargs):
         return fake_client([response])
 
-    monkeypatch.setattr(auth.httpx, "Client", fake_http_client)
+    monkeypatch.setattr(auth_remote.httpx, "Client", fake_http_client)
     data = auth.swain_login_with_credentials(
         "https://api.example.com", "user@example.com", "secret"
     )
@@ -61,7 +65,7 @@ def test_read_login_token_with_credentials(monkeypatch):
         assert password == "wonderland"
         return {"token": "abc", "refresh_token": "refresh"}
 
-    monkeypatch.setattr(auth, "swain_login_with_credentials", fake_login)
+    monkeypatch.setattr(auth_handlers, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
         username="alice",
         password="wonderland",
@@ -73,10 +77,10 @@ def test_read_login_token_with_credentials(monkeypatch):
 
 
 def test_read_login_token_prompts_for_missing_credentials(monkeypatch):
-    monkeypatch.setattr(auth, "prompt_text", lambda *a, **k: "bob")
-    monkeypatch.setattr(auth, "prompt_password", lambda *a, **k: "builder")
+    monkeypatch.setattr(auth_handlers, "prompt_text", lambda *a, **k: "bob")
+    monkeypatch.setattr(auth_handlers, "prompt_password", lambda *a, **k: "builder")
     monkeypatch.setattr(
-        auth,
+        auth_handlers,
         "swain_login_with_credentials",
         lambda base, user, pwd: {"token": "xyz", "refresh_token": None},
     )
@@ -96,7 +100,7 @@ def test_handle_auth_login_with_credentials(monkeypatch):
         assert password == "password123"
         return {"token": "new-token", "refresh_token": "new-refresh"}
 
-    monkeypatch.setattr(auth, "swain_login_with_credentials", fake_login)
+    monkeypatch.setattr(auth_handlers, "swain_login_with_credentials", fake_login)
     args = SimpleNamespace(
         username="carol",
         password="password123",
@@ -109,8 +113,8 @@ def test_handle_auth_login_with_credentials(monkeypatch):
 
 
 def test_interactive_auth_setup_prompts_credentials(monkeypatch):
-    monkeypatch.setattr(auth, "resolve_auth_token", lambda: None)
-    monkeypatch.setattr(auth, "prompt_confirm", lambda prompt, default=True: True)
+    monkeypatch.setattr(auth_handlers, "resolve_auth_token", lambda: None)
+    monkeypatch.setattr(auth_handlers, "prompt_confirm", lambda prompt, default=True: True)
 
     captured_args: Dict[str, Any] = {}
 
@@ -119,7 +123,7 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
         ns.login_refresh_token = "refresh-token"
         return "credential-token"
 
-    monkeypatch.setattr(auth, "read_login_token", fake_read_login_token)
+    monkeypatch.setattr(auth_handlers, "read_login_token", fake_read_login_token)
 
     captured_persist: Dict[str, Optional[str]] = {}
 
@@ -127,7 +131,7 @@ def test_interactive_auth_setup_prompts_credentials(monkeypatch):
         captured_persist["token"] = token
         captured_persist["refresh"] = refresh
 
-    monkeypatch.setattr(auth, "persist_auth_token", fake_persist)
+    monkeypatch.setattr(auth_handlers, "persist_auth_token", fake_persist)
 
     auth.interactive_auth_setup(auth_base_url="https://auth.example.com")
 
@@ -189,7 +193,7 @@ def test_handle_auth_refresh_updates_token(monkeypatch, fake_client, fake_respon
 
     monkeypatch.delenv(constants.AUTH_TOKEN_ENV_VAR, raising=False)
     monkeypatch.delenv(constants.AUTH_TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.setattr(auth.httpx, "Client", fake_http_client)
+    monkeypatch.setattr(auth_remote.httpx, "Client", fake_http_client)
 
     args = SimpleNamespace(auth_base_url="https://api.example.com")
     assert auth.handle_auth_refresh(args) == 0
@@ -200,7 +204,7 @@ def test_handle_auth_refresh_updates_token(monkeypatch, fake_client, fake_respon
 
 
 def test_persist_auth_token_falls_back_to_chunked_storage(monkeypatch):
-    original_set_password = auth.keyring.set_password
+    original_set_password = auth_tokens.keyring.set_password
 
     def flaky_set_password(service: str, username: str, password: str) -> None:
         # Simulate the Windows Credential Manager blob limit by rejecting large secrets.
@@ -209,7 +213,7 @@ def test_persist_auth_token_falls_back_to_chunked_storage(monkeypatch):
                 raise OSError("credential blob too large")
         original_set_password(service, username, password)
 
-    monkeypatch.setattr(auth.keyring, "set_password", flaky_set_password)
+    monkeypatch.setattr(auth_tokens.keyring, "set_password", flaky_set_password)
 
     token = "x" * 1200
     refresh = "r" * 1200
@@ -221,7 +225,7 @@ def test_persist_auth_token_falls_back_to_chunked_storage(monkeypatch):
 
     # Ensure chunk entries are removed on logout.
     auth.clear_auth_state()
-    chunk0 = auth.keyring.get_password(
+    chunk0 = auth_tokens.keyring.get_password(
         constants.KEYRING_SERVICE, f"{constants.KEYRING_USERNAME}__chunk_0"
     )
     assert chunk0 is None

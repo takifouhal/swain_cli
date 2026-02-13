@@ -36,6 +36,11 @@ _SENSITIVE_KV_PATTERN = re.compile(
     r"token|access_token|refresh_token|password|passwd|secret|api_key|apikey"
     r")\b\s*([:=])\s*([^\s]+)"
 )
+_SENSITIVE_JSON_PATTERN = re.compile(
+    r"(?i)([\"']?("
+    r"token|access_token|refresh_token|password|passwd|secret|api_key|apikey"
+    r")[\"']?\s*:\s*)([\"'])([^\"']*)([\"'])"
+)
 _AUTH_HEADER_PATTERN = re.compile(r"(?i)\bAuthorization:\s*Bearer\s+([^\s]+)")
 _JWT_PATTERN = re.compile(
     r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
@@ -46,6 +51,9 @@ def redact(text: str) -> str:
     """Best-effort redaction for common secret patterns in logs."""
     value = str(text)
     value = _AUTH_HEADER_PATTERN.sub("Authorization: Bearer ***", value)
+    value = _SENSITIVE_JSON_PATTERN.sub(
+        lambda m: f"{m.group(1)}{m.group(3)}***{m.group(5)}", value
+    )
     value = _SENSITIVE_KV_PATTERN.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
     value = _JWT_PATTERN.sub("***", value)
     return value

@@ -387,17 +387,17 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
             f" #{swain_connection.id}"
             f" ({swain_connection.database_name or 'connection'})"
         )
-        log(f"  dynamic swagger: {schema_display}")
+        log(f"  dynamic swagger: {redact(schema_display)}")
         if tenant_id:
             log(f"  tenant: {tenant_id}")
     elif crudsql_base:
         log(f"  swain base: {swain_base}")
         log(f"  crudsql base: {crudsql_base}")
-        log(f"  dynamic swagger: {schema_display}")
+        log(f"  dynamic swagger: {redact(schema_display)}")
         if tenant_id:
             log(f"  tenant: {tenant_id}")
     else:
-        log(f"  schema: {schema_display}")
+        log(f"  schema: {redact(schema_display)}")
     log(f"  output: {out_value}")
     log(f"  languages: {', '.join(languages)}")
     if config_value:

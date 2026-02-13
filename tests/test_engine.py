@@ -12,6 +12,8 @@ import pytest
 
 import swain_cli.constants as constants
 import swain_cli.engine as engine
+import swain_cli.engine.core as engine_core
+import swain_cli.engine.jre as engine_jre
 from swain_cli.errors import CLIError
 
 
@@ -63,15 +65,15 @@ def test_ensure_embedded_jre_reuses_cached_install(tmp_path, monkeypatch):
     expected_sha = "cached-sha"
     (runtime_dir / constants.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
 
-    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine_jre, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine_jre, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine_jre, "get_jre_asset", lambda: constants.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine_jre, "resolve_asset_sha256", lambda asset: expected_sha)
 
     def fail_fetch(*args, **kwargs):
         raise AssertionError("unexpected download while cached JRE is valid")
 
-    monkeypatch.setattr(engine, "fetch_asset_file", fail_fetch)
+    monkeypatch.setattr(engine_jre, "fetch_asset_file", fail_fetch)
 
     assert engine.ensure_embedded_jre(force=False) == runtime_dir
     assert (runtime_dir / "bin" / "java").exists()
@@ -84,10 +86,10 @@ def test_ensure_embedded_jre_reinstalls_on_marker_mismatch(tmp_path, monkeypatch
     (runtime_dir / constants.JRE_MARKER_FILENAME).write_text("old-sha", encoding="utf-8")
     expected_sha = "new-sha"
 
-    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine_jre, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine_jre, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine_jre, "get_jre_asset", lambda: constants.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine_jre, "resolve_asset_sha256", lambda asset: expected_sha)
 
     calls = {"fetches": 0}
 
@@ -102,9 +104,9 @@ def test_ensure_embedded_jre_reinstalls_on_marker_mismatch(tmp_path, monkeypatch
         (dest / "bin").mkdir(parents=True, exist_ok=True)
         (dest / "bin" / "java").write_text("new", encoding="utf-8")
 
-    monkeypatch.setattr(engine, "fetch_asset_file", fake_fetch)
-    monkeypatch.setattr(engine, "extract_archive", fake_extract)
-    monkeypatch.setattr(engine, "normalize_runtime_dir", lambda *_: None)
+    monkeypatch.setattr(engine_jre, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(engine_jre, "extract_archive", fake_extract)
+    monkeypatch.setattr(engine_jre, "normalize_runtime_dir", lambda *_: None)
 
     assert engine.ensure_embedded_jre(force=False) == runtime_dir
     assert calls["fetches"] == 1
@@ -119,10 +121,10 @@ def test_ensure_embedded_jre_force_reinstalls(tmp_path, monkeypatch):
     expected_sha = "force-sha"
     (runtime_dir / constants.JRE_MARKER_FILENAME).write_text(expected_sha, encoding="utf-8")
 
-    monkeypatch.setattr(engine, "java_binary_name", lambda: "java")
-    monkeypatch.setattr(engine, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
-    monkeypatch.setattr(engine, "get_jre_asset", lambda: engine.JREAsset("dummy.tar.gz", None))
-    monkeypatch.setattr(engine, "resolve_asset_sha256", lambda asset: expected_sha)
+    monkeypatch.setattr(engine_jre, "java_binary_name", lambda: "java")
+    monkeypatch.setattr(engine_jre, "jre_install_dir", lambda *args, **kwargs: runtime_dir)
+    monkeypatch.setattr(engine_jre, "get_jre_asset", lambda: constants.JREAsset("dummy.tar.gz", None))
+    monkeypatch.setattr(engine_jre, "resolve_asset_sha256", lambda asset: expected_sha)
 
     observed = {"force": None}
 
@@ -134,9 +136,9 @@ def test_ensure_embedded_jre_force_reinstalls(tmp_path, monkeypatch):
         (dest / "bin").mkdir(parents=True, exist_ok=True)
         (dest / "bin" / "java").write_text("new", encoding="utf-8")
 
-    monkeypatch.setattr(engine, "fetch_asset_file", fake_fetch)
-    monkeypatch.setattr(engine, "extract_archive", fake_extract)
-    monkeypatch.setattr(engine, "normalize_runtime_dir", lambda *_: None)
+    monkeypatch.setattr(engine_jre, "fetch_asset_file", fake_fetch)
+    monkeypatch.setattr(engine_jre, "extract_archive", fake_extract)
+    monkeypatch.setattr(engine_jre, "normalize_runtime_dir", lambda *_: None)
 
     assert engine.ensure_embedded_jre(force=True) == runtime_dir
     assert observed["force"] is True
@@ -173,7 +175,7 @@ def test_extract_archive_blocks_tar_slip(tmp_path):
 def test_cache_lock_removes_stale_lock(tmp_path, monkeypatch):
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
-    monkeypatch.setattr(engine, "cache_root", lambda create=True: cache_dir)
+    monkeypatch.setattr(engine_core, "cache_root", lambda create=True: cache_dir)
 
     lock_path = engine.cache_lock_path()
     lock_path.write_text("stale", encoding="utf-8")
