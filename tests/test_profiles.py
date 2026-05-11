@@ -155,10 +155,13 @@ languages = ["go"]
         encoding="utf-8",
     )
     result = runner.invoke(cli.app, ["profiles", "show", "missing"])
+    output = result.output
+    if result.stderr_bytes is not None:
+        output += result.stderr
     assert result.exit_code == constants.EXIT_CODE_USAGE
-    assert "unknown profile: missing" in result.stdout
-    assert "available: backend" in result.stdout
-    assert "Traceback" not in result.stdout
+    assert "unknown profile: missing" in output
+    assert "available: backend" in output
+    assert "Traceback" not in output
 
 
 def test_gen_unknown_profile_exits_with_usage(tmp_path, monkeypatch):
@@ -172,7 +175,10 @@ languages = ["python"]
         encoding="utf-8",
     )
     result = runner.invoke(cli.app, ["gen", "--profile", "missing", "--out", "sdks", "--plan-only"])
+    output = result.output
+    if result.stderr_bytes is not None:
+        output += result.stderr
     assert result.exit_code == constants.EXIT_CODE_USAGE
-    assert "unknown profile: missing" in result.stdout
-    assert "available: frontend" in result.stdout
-    assert "Traceback" not in result.stdout
+    assert "unknown profile: missing" in output
+    assert "available: frontend" in output
+    assert "Traceback" not in output

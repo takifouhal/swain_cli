@@ -12,7 +12,7 @@ import httpx
 from .errors import CLIError
 
 try:  # Optional dependency (swain_cli[yaml])
-    import yaml  # type: ignore
+    import yaml
 except Exception:  # pragma: no cover
     yaml = None
 
