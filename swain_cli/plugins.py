@@ -6,7 +6,7 @@ import importlib.metadata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, cast
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple, cast
 
 from .args import GenArgs
 from .context import AppContext
@@ -50,10 +50,12 @@ def _iter_entry_points(group: str) -> List[importlib.metadata.EntryPoint]:
     entry_points = importlib.metadata.entry_points()
     if hasattr(entry_points, "select"):
         return list(entry_points.select(group=group))
+    if isinstance(entry_points, Mapping):
+        return list(entry_points.get(group, []))
     return [
         ep
         for ep in cast(Iterable[importlib.metadata.EntryPoint], entry_points)
-        if ep.group == group
+        if getattr(ep, "group", None) == group
     ]
 
 

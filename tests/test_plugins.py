@@ -42,6 +42,19 @@ def test_list_plugins(monkeypatch) -> None:
     ]
 
 
+def test_iter_entry_points_supports_mapping_shape(monkeypatch) -> None:
+    entry_points = [
+        DummyEntryPoint("alpha", "pkg.alpha:plugin", lambda: object()),
+    ]
+    monkeypatch.setattr(
+        plugins.importlib.metadata,
+        "entry_points",
+        lambda: {plugins.PLUGIN_GROUP: entry_points, "other": []},
+    )
+
+    assert plugins._iter_entry_points(plugins.PLUGIN_GROUP) == entry_points
+
+
 def test_plugin_statuses_records_load_errors(monkeypatch) -> None:
     _clear_plugin_caches()
 
