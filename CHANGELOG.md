@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.18
+- Restore CI compatibility across the supported Python matrix by handling legacy entry-point metadata, Python 3.8 source builds, pytest stderr capture differences, and optional YAML mypy checks.
+
 ## v0.3.17
 - Streamline the interactive wizard so target language selection is the last required prompt; advanced generator settings, profile saving, and run confirmation now live behind the extended path.
 - List `typescript-axios` and `typescript-fetch` as distinct interactive targets while preserving `typescript` as a shortcut for `typescript-axios`.

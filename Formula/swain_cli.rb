@@ -1,7 +1,7 @@
 class SwainCli < Formula
   desc "Zero-setup SDK generator built on top of OpenAPI Generator"
   homepage "https://github.com/takifouhal/swain_cli"
-  version "0.3.17"
+  version "0.3.18"
   license "Apache-2.0"
 
   on_macos do
