@@ -1241,6 +1241,11 @@ def interactive(
         "--no-run",
         help="only print the generated command (do not execute)",
     ),
+    extended: bool = typer.Option(
+        False,
+        "--extended",
+        help="ask advanced generator/profile prompts after language selection",
+    ),
 ) -> None:
     cfg = ctx.obj.config
     merged_engine = engine.lower()
@@ -1269,6 +1274,7 @@ def interactive(
         crudsql_url=merged_crudsql_url,
         engine=merged_engine,
         no_run=no_run,
+        extended=extended,
         app_ctx=ctx.obj.app_ctx,
     )
     _run_handler(handle_interactive, args)

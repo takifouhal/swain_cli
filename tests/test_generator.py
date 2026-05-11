@@ -14,6 +14,12 @@ def test_typescript_alias():
     assert constants.LANGUAGE_ALIASES["typescript"] == "typescript-axios"
 
 
+def test_common_languages_distinguish_typescript_generators():
+    assert "typescript" not in constants.COMMON_LANGUAGES
+    assert "typescript-axios" in constants.COMMON_LANGUAGES
+    assert "typescript-fetch" in constants.COMMON_LANGUAGES
+
+
 def test_build_generate_command_alias(tmp_path):
     args = GenArgs(
         out=str(tmp_path),

@@ -46,7 +46,8 @@ EXIT_CODE_INTERRUPT = 130
 LANGUAGE_ALIASES = {"typescript": "typescript-axios"}
 COMMON_LANGUAGES = [
     "python",
-    "typescript",
+    "typescript-axios",
+    "typescript-fetch",
     "go",
     "java",
     "csharp",

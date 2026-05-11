@@ -98,6 +98,7 @@ def coerce_interactive_args(raw: Any) -> InteractiveArgs:
     java_opts = list(getattr(raw, "java_opts", []) or [])
     generator_args = list(getattr(raw, "generator_args", None) or [])
     no_run = bool(getattr(raw, "no_run", False))
+    extended = bool(getattr(raw, "extended", False))
     engine_choice = getattr(raw, "engine", "embedded") or "embedded"
     engine_choice = str(engine_choice).lower()
     return InteractiveArgs(
@@ -108,6 +109,7 @@ def coerce_interactive_args(raw: Any) -> InteractiveArgs:
         crudsql_url=crudsql_base_arg,
         engine=engine_choice,
         no_run=no_run,
+        extended=extended,
     )
 
 
@@ -126,6 +128,14 @@ def _validate_languages(raw: str) -> Optional[str]:
     if not _parse_languages(raw):
         return "please provide at least one language"
     return None
+
+
+def _language_choice_title(lang: str) -> str:
+    if lang == "typescript-axios":
+        return "typescript-axios (TypeScript + axios, default for 'typescript')"
+    if lang == "typescript-fetch":
+        return "typescript-fetch (TypeScript + Fetch API)"
+    return lang
 
 
 def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
@@ -218,9 +228,9 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
 
         language_choices = [
             questionary.Choice(
-                title=lang,
+                title=_language_choice_title(lang),
                 value=lang,
-                checked=(lang in {"python", "typescript"}),
+                checked=(lang in {"python", "typescript-axios"}),
             )
             for lang in COMMON_LANGUAGES
         ]
@@ -231,6 +241,13 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
         languages = [str(lang).strip().lower() for lang in languages_selected if str(lang).strip()]
         if not languages:
             raise CLIError("please select at least one language")
+
+        extended_flow = bool(args.extended)
+        if not extended_flow:
+            extended_flow = not deps.prompt_confirm(
+                "Use defaults for remaining generator settings?",
+                default=True,
+            )
 
         generator_version = args.generator_version
         config_value: Optional[str] = None
@@ -247,7 +264,10 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
         post_hooks: List[str] = []
         run_hooks = False
 
-        if deps.prompt_confirm("Configure advanced generator options?", default=False):
+        if extended_flow and deps.prompt_confirm(
+            "Configure advanced generator options?",
+            default=False,
+        ):
             config_value = deps.prompt_text(
                 "Generator config file (-c) (leave blank to skip)",
                 default="",
@@ -476,7 +496,10 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
 
     log(f"equivalent command: {redact(format_cli_command(command_preview))}")
 
-    if deps.prompt_confirm("Save this configuration as a profile?", default=False):
+    if extended_flow and deps.prompt_confirm(
+        "Save this configuration as a profile?",
+        default=False,
+    ):
         profile_name = deps.prompt_text(
             "Profile name",
             default="",
@@ -520,7 +543,7 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
         log("no-run mode enabled; generation not executed")
         return 0
 
-    if not deps.prompt_confirm("Run generation now?", default=True):
+    if extended_flow and not deps.prompt_confirm("Run generation now?", default=True):
         log("generation skipped; run the command above when ready")
         return 0
 

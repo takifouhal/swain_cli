@@ -87,6 +87,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
         captured["generator_args"] = getattr(args, "generator_args", None)
         captured["crudsql_url"] = getattr(args, "crudsql_url", None)
         captured["swain_base_url"] = getattr(args, "swain_base_url", None)
+        captured["extended"] = getattr(args, "extended", None)
         return 0
 
     monkeypatch.setattr(cli, "handle_interactive", fake_handle_interactive)
@@ -104,6 +105,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
             "--skip-operation-example",
             "--swain-base-url",
             "https://api.override",
+            "--extended",
         ],
     )
     assert result.exit_code == 0
@@ -114,6 +116,7 @@ def test_cli_interactive_accepts_java_opt_and_generator_args(monkeypatch):
     ]
     assert captured.get("swain_base_url") == "https://api.override"
     assert captured.get("crudsql_url") is None
+    assert captured.get("extended") is True
 
 
 def test_handle_interactive_skip_generation(monkeypatch, capfd):
@@ -131,7 +134,7 @@ def test_handle_interactive_skip_generation(monkeypatch, capfd):
         raw={"id": 2, "project_id": 1},
     )
 
-    confirm_values = iter([False, False, False])
+    confirm_values = iter([False, False, False, False])
 
     text_values = iter(["sdks"])
 
@@ -205,12 +208,18 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         raw={"id": 110, "project_id": 102},
     )
 
-    confirm_values = iter([False, False, True])
+    confirm_values = iter([True])
 
     text_values = iter(["sdks"])
 
     def fake_multi_select(prompt, choices):
         assert "languages" in prompt.lower()
+        values = [choice.value for choice in choices]
+        titles = [choice.title for choice in choices]
+        assert "typescript-axios" in values
+        assert "typescript-fetch" in values
+        assert "typescript" not in values
+        assert any("default" in title for title in titles if "typescript-axios" in title)
         return ["go"]
 
     def fake_confirm(prompt, default=True):
@@ -314,7 +323,7 @@ def test_handle_interactive_saves_profile_in_no_run_mode(monkeypatch):
         raw={"id": 2, "project_id": 1},
     )
 
-    confirm_values = iter([False, True])
+    confirm_values = iter([False, False, True])
     text_values = iter(["sdks", "frontend"])
 
     def fake_confirm(prompt, default=True):

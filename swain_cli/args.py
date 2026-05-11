@@ -53,3 +53,4 @@ class InteractiveArgs:
     crudsql_url: Optional[str] = None
     engine: str = "embedded"
     no_run: bool = False
+    extended: bool = False

@@ -62,8 +62,8 @@ swain_cli interactive
 # List all generators (delegates to the pinned OpenAPI Generator)
 swain_cli list-generators
 
-# Generate Python and TypeScript clients into ./sdks/<generator>
-swain_cli gen -i ./openapi.yaml -l python -l typescript -o ./sdks \
+# Generate Python and TypeScript/axios clients into ./sdks/<generator>
+swain_cli gen -i ./openapi.yaml -l python -l typescript-axios -o ./sdks \
   -p packageName=my_api_client -p packageVersion=0.3.0
 
 # Preview the resolved plan without downloading/fetching anything
@@ -80,7 +80,7 @@ swain_cli gen --plan-only -i ./openapi.yaml -l python -o ./sdks
 - Docs/tests are disabled by default via `--global-property=apiDocs=false,apiTests=false,modelDocs=false,modelTests=false`; override with your own `--generator-arg` when you need them.
 - Operation examples are skipped by default (`--skip-operation-example`) to avoid OpenAPI Generator blowing up on circular schemas; pass your own generator arg to opt back in if you really need them.
 - To match modern OAS defaults the CLI automatically adds `-p disallowAdditionalPropertiesIfNotPresent=false`. Opt into stricter behaviour with `-p disallowAdditionalPropertiesIfNotPresent=true` or a generator config file.
-- The `typescript` shortcut maps to `typescript-axios`; request `typescript-fetch` explicitly when you need that runtime.
+- The `typescript` shortcut maps to `typescript-axios`; request `typescript-fetch` explicitly when you need the Fetch API runtime. The interactive wizard lists `typescript-axios` and `typescript-fetch` separately.
 - Plan output:
   - `--plan-only` is side-effect free (no network / no downloads).
   - `--dry-run` can resolve schemas (may fetch/auth) but does not invoke the generator.
@@ -89,7 +89,7 @@ swain_cli gen --plan-only -i ./openapi.yaml -l python -o ./sdks
 - Hooks (dangerous): pass `--run-hooks` to enable `--post-hook` commands and any hooks configured in a profile.
 
 ## Command reference
-- `swain_cli interactive` — guided prompts to build a `swain_cli gen` command (use `--no-run` to only print).
+- `swain_cli interactive` — guided prompts to build and run a `swain_cli gen` command. After target language selection it uses defaults unless you opt into optional settings/profile prompts; use `--extended` to always show those prompts or `--no-run` to only print.
 - `swain_cli list-generators` — enumerate all generators provided by the pinned OpenAPI Generator JAR. Add `--engine system` to validate a local Java installation instead.
 - `swain_cli doctor` — print environment information, cache paths, installed JREs, and JAR availability (`--format json` for automation/support bundles).
 - `swain_cli auth` — manage credentials for hosted Swain services (`login`, `logout`, `status`, `refresh`).
