@@ -42,7 +42,7 @@ def test_determine_swain_tenant_id_multiple_claims_requires_choice(monkeypatch, 
 
 def test_swain_login_with_credentials_success(monkeypatch, fake_client, fake_response):
     response = fake_response(
-        "https://api.example.com/auth/login",
+        "https://api.example.com/api/auth/login",
         json_data={"token": "abc", "refresh_token": "refresh"},
         content=b"{}",
     )
@@ -56,6 +56,36 @@ def test_swain_login_with_credentials_success(monkeypatch, fake_client, fake_res
     )
     assert data["token"] == "abc"
     assert data["refresh_token"] == "refresh"
+
+
+def test_swain_login_with_credentials_falls_back_to_legacy_auth(
+    monkeypatch, fake_client, fake_response
+):
+    primary = fake_response(
+        "https://api.example.com/api/auth/login",
+        status_code=404,
+        content=b"missing",
+        reason="Not Found",
+    )
+    fallback = fake_response(
+        "https://api.example.com/auth/login",
+        json_data={"token": "abc", "refresh_token": "refresh"},
+        content=b"{}",
+    )
+    calls = []
+
+    def fake_http_client(**kwargs):
+        return fake_client([primary, fallback], calls)
+
+    monkeypatch.setattr(auth_remote.httpx, "Client", fake_http_client)
+    data = auth.swain_login_with_credentials(
+        "https://api.example.com", "user@example.com", "secret"
+    )
+    assert data["token"] == "abc"
+    assert [call[1] for call in calls] == [
+        "https://api.example.com/api/auth/login",
+        "https://api.example.com/auth/login",
+    ]
 
 
 def test_read_login_token_with_credentials(monkeypatch):
@@ -183,7 +213,7 @@ def test_handle_auth_refresh_updates_token(monkeypatch, fake_client, fake_respon
     auth.persist_auth_token("old-access", "old-refresh")
 
     response = fake_response(
-        "https://api.example.com/auth/refresh",
+        "https://api.example.com/api/auth/refresh",
         json_data={"token": "new-access", "refresh_token": "new-refresh"},
         content=b"{}",
     )

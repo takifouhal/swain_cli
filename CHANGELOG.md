@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.16
+- Align Swain backend defaults with the v2 route contract: derived CrudSQL proxy URLs now use `/api/crud`, generated SDK base-path patching targets `/api/crud/api`, and credential auth tries `/api/auth/*` before legacy `/auth/*`.
+
 ## v0.3.15
 - Add named generation profiles plus `profiles` CLI helpers.
 - Add generation planning flags (`gen --plan-only/--dry-run`) to preview resolved runs without executing OpenAPI Generator.

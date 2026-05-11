@@ -129,7 +129,7 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
         spec = json.loads(Path(schema_path).read_text())
         assert spec["host"] == "api.example.com"
         assert spec["schemes"] == ["https"]
-        assert spec["basePath"] == "/crud/api"
+        assert spec["basePath"] == "/api/crud/api"
         return 0, ""
 
     monkeypatch.setattr(generator, "run_openapi_generator", fake_run)
@@ -157,7 +157,7 @@ def test_handle_gen_derives_crud_base_from_swain_base(monkeypatch, tmp_path):
 
     assert generator.handle_gen(args) == 0
     assert captured["swain_base"] == "https://api.example.com"
-    assert captured["crud_base"] == "https://api.example.com/crud"
+    assert captured["crud_base"] == "https://api.example.com/api/crud"
     assert not schema_file.exists()
 
 

@@ -229,7 +229,7 @@ def config_template() -> str:
         "#   CLI flags > environment variables > this file > built-in defaults\n"
         "\n"
         "# swain_base_url = \"https://api.swain.technology\"\n"
-        "# crudsql_url = \"https://api.swain.technology/crud\"\n"
+        "# crudsql_url = \"https://api.swain.technology/api/crud\"\n"
         "# tenant_id = \"123\"\n"
         "\n"
         "# engine = \"embedded\"  # or \"system\"\n"

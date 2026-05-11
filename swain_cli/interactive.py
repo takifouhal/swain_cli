@@ -132,9 +132,9 @@ def run_interactive(args: InteractiveArgs, deps: InteractiveDeps) -> int:
     log("interactive SDK generation wizard")
     log("press Ctrl+C at any time to cancel")
     swain_base, crudsql_base = resolve_base_urls(args.swain_base_url, args.crudsql_url)
-    # Authenticate against the CrudSQL surface (proxy or direct) since auth endpoints
-    # live there; Swain discovery continues to use the platform base without /crud.
-    deps.interactive_auth_setup(auth_base_url=crudsql_base)
+    # Authenticate through the Swain platform proxy; direct CrudSQL auth remains
+    # supported by the auth helper's legacy fallback.
+    deps.interactive_auth_setup(auth_base_url=swain_base)
     dynamic_swagger_url: Optional[str] = None
     swain_project: Optional[SwainProject] = None
     swain_connection: Optional[SwainConnection] = None

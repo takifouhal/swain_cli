@@ -10,7 +10,7 @@ import httpx
 from ..context import AppContext, default_http_client_factory
 from ..errors import CLIError
 from ..http import describe_http_error, http_timeout, request_headers
-from ..urls import swain_url
+from ..urls import swain_auth_candidate_urls
 from ..utils import safe_str
 
 
@@ -25,18 +25,32 @@ def swain_login_with_credentials(
         raise CLIError("username is required for credential login")
     if not password:
         raise CLIError("password is required for credential login")
-    login_url = swain_url(base_url, "auth/login", enforce_api_prefix=False)
     headers = request_headers(content_type="application/json")
     payload = {"username": username, "password": password}
     timeout = http_timeout()
+    last_error: Optional[str] = None
     client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
     with client_factory(timeout) as client:
-        try:
-            response = client.post(login_url, headers=headers, json=payload)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            detail = describe_http_error(exc)
-            raise CLIError(f"credential login failed: {detail}") from exc
+        for login_url in swain_auth_candidate_urls(base_url, "auth/login"):
+            try:
+                response = client.post(login_url, headers=headers, json=payload)
+                if response.status_code in {404, 405}:
+                    last_error = describe_http_error(
+                        httpx.HTTPStatusError(
+                            "error",
+                            request=httpx.Request("POST", login_url),
+                            response=response,
+                        )
+                    )
+                    continue
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                detail = describe_http_error(exc)
+                raise CLIError(f"credential login failed: {detail}") from exc
+            break
+        else:
+            detail = last_error or "no login endpoint matched"
+            raise CLIError(f"credential login failed: {detail}")
     try:
         data = response.json()
     except json.JSONDecodeError as exc:
@@ -75,22 +89,28 @@ def swain_refresh_with_token(
     client_factory = ctx.http_client_factory if ctx is not None else default_http_client_factory
     with client_factory(timeout) as client:
         for path in candidates:
-            url = swain_url(base_url, path, enforce_api_prefix=False)
-            for payload in payloads:
-                try:
-                    response = client.post(url, headers=headers, json=payload)
-                    if response.status_code in {404, 405}:
+            candidate_urls = swain_auth_candidate_urls(base_url, path)
+            for url in candidate_urls:
+                endpoint_missing = False
+                for payload in payloads:
+                    try:
+                        response = client.post(url, headers=headers, json=payload)
+                        if response.status_code in {404, 405}:
+                            last_error = f"{response.status_code} {response.reason_phrase}".strip()
+                            endpoint_missing = True
+                            break
+                        response.raise_for_status()
+                    except httpx.HTTPError as exc:
+                        last_error = describe_http_error(exc)
                         continue
-                    response.raise_for_status()
-                except httpx.HTTPError as exc:
-                    last_error = describe_http_error(exc)
-                    continue
 
-                try:
-                    data = response.json()
-                except json.JSONDecodeError as exc:
-                    raise CLIError("refresh response was not valid JSON") from exc
-                if isinstance(data, dict):
-                    return data
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as exc:
+                        raise CLIError("refresh response was not valid JSON") from exc
+                    if isinstance(data, dict):
+                        return data
+                if endpoint_missing:
+                    continue
     detail = last_error or "no refresh endpoint matched"
     raise CLIError(f"refresh failed: {detail}")

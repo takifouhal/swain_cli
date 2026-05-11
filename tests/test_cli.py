@@ -296,7 +296,7 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
     assert passed_args.swain_base_url == "https://api.example.com"
     assert passed_args.crudsql_url is None
     assert seen_bases == ["https://api.example.com", "https://api.example.com"]
-    assert dynamic_bases == ["https://api.example.com/crud"]
+    assert dynamic_bases == ["https://api.example.com/api/crud"]
 
 
 def test_handle_interactive_saves_profile_in_no_run_mode(monkeypatch):

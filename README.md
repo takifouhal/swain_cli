@@ -73,9 +73,9 @@ swain_cli gen --plan-only -i ./openapi.yaml -l python -o ./sdks
 
 ## Generating SDKs
 - `swain_cli gen` accepts every OpenAPI Generator flag you already know (`-c`, `-t`, `-p`, etc.) and repeatable `-l/--lang` options.
-- By default the CLI talks to `https://api.swain.technology` for Swain discovery and downloads the CrudSQL dynamic swagger from `https://api.swain.technology/crud`. Override with `--swain-base-url` (platform) and/or `--crudsql-url` (CrudSQL), or point to a local spec via `-i/--schema`. Example local backend: `swain_cli interactive --swain-base-url http://localhost:8080` (infers CrudSQL as `http://localhost:8080/crud`).
+- By default the CLI talks to `https://api.swain.technology` for Swain discovery and downloads the CrudSQL dynamic swagger from `https://api.swain.technology/api/crud`. Override with `--swain-base-url` (platform) and/or `--crudsql-url` (CrudSQL), or point to a local spec via `-i/--schema`. Example local backend: `swain_cli interactive --swain-base-url http://localhost:8080` (infers CrudSQL as `http://localhost:8080/api/crud`).
 - When generating from a downloaded dynamic swagger, `swain_cli` patches the schema base URL (Swagger `host`/`schemes`/`basePath` or OpenAPI `servers`) so generated SDKs default to the same host/path you pointed the CLI at.
-- Swain project integration: provide `--swain-project-id` and `--swain-connection-id` to resolve the deployed connection swagger automatically after authenticating. Discover IDs with `swain_cli projects` and `swain_cli connections`. The CLI will find the active build, fetch `/api/dynamic_swagger`, and feed it to the generator.
+- Swain project integration: provide `--swain-project-id` and `--swain-connection-id` to resolve the deployed connection swagger automatically after authenticating. Discover IDs with `swain_cli projects` and `swain_cli connections`. The CLI will find the active build, fetch its `/api/dynamic_swagger`, and feed it to the generator.
 - JVM tuning: runs start with `-Xms2g -Xmx10g -XX:+UseG1GC`. If the build still runs out of memory the CLI retries at `-Xmx14g`. Supply extra options with `--java-opt` (repeatable) or export `SWAIN_CLI_JAVA_OPTS`.
 - Docs/tests are disabled by default via `--global-property=apiDocs=false,apiTests=false,modelDocs=false,modelTests=false`; override with your own `--generator-arg` when you need them.
 - Operation examples are skipped by default (`--skip-operation-example`) to avoid OpenAPI Generator blowing up on circular schemas; pass your own generator arg to opt back in if you really need them.
@@ -107,7 +107,7 @@ Run `swain_cli --help` or `swain_cli <command> --help` for full usage.
 ## Authentication
 Use the `auth` subcommands to prepare credentials before generating SDKs against hosted Swain projects.
 
-- `swain_cli auth login` — authenticate via username/password (`POST /auth/login`). Access and refresh tokens are stored in the system keyring.
+- `swain_cli auth login` — authenticate via username/password (`POST /api/auth/login` on the v2 backend, with a legacy `/auth/login` fallback). Access and refresh tokens are stored in the system keyring.
 - Refresh tokens are stored for future use; use `swain_cli auth refresh` to refresh manually.
 - For ephemeral automation, set `SWAIN_CLI_AUTH_TOKEN` (takes precedence over the keyring).
 - For CI systems that prefer file-based secrets, set `SWAIN_CLI_AUTH_TOKEN_FILE` to a file containing the token.

@@ -37,7 +37,7 @@ GLOBAL_PROPERTY_DISABLE_DOCS = "apiDocs=false,apiTests=false,modelDocs=false,mod
 SKIP_OPERATION_EXAMPLE_FLAG = "--skip-operation-example"
 
 DEFAULT_SWAIN_BASE_URL = "https://api.swain.technology"
-DEFAULT_CRUDSQL_API_BASE_URL = f"{DEFAULT_SWAIN_BASE_URL.rstrip('/')}/crud"
+DEFAULT_CRUDSQL_API_BASE_URL = f"{DEFAULT_SWAIN_BASE_URL.rstrip('/')}/api/crud"
 
 EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
