@@ -12,12 +12,23 @@ from swain_cli.plugins import PluginSchemaResult
 
 def test_typescript_alias():
     assert constants.LANGUAGE_ALIASES["typescript"] == "typescript-axios"
+    assert constants.LANGUAGE_ALIASES["swift"] == "swift5"
 
 
 def test_common_languages_distinguish_typescript_generators():
     assert "typescript" not in constants.COMMON_LANGUAGES
     assert "typescript-axios" in constants.COMMON_LANGUAGES
     assert "typescript-fetch" in constants.COMMON_LANGUAGES
+    assert "swift" not in constants.COMMON_LANGUAGES
+    for language in [
+        "javascript",
+        "dart",
+        "dart-dio",
+        "php",
+        "swift5",
+        "rust",
+    ]:
+        assert language in constants.COMMON_LANGUAGES
 
 
 def test_build_generate_command_alias(tmp_path):

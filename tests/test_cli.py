@@ -218,8 +218,16 @@ def test_handle_interactive_runs_generation_with_tenant(monkeypatch):
         titles = [choice.title for choice in choices]
         assert "typescript-axios" in values
         assert "typescript-fetch" in values
+        assert "javascript" in values
+        assert "dart" in values
+        assert "dart-dio" in values
+        assert "php" in values
+        assert "swift5" in values
+        assert "rust" in values
         assert "typescript" not in values
+        assert "swift" not in values
         assert any("default" in title for title in titles if "typescript-axios" in title)
+        assert any("default" in title for title in titles if "swift5" in title)
         return ["go"]
 
     def fake_confirm(prompt, default=True):

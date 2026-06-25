@@ -12,6 +12,9 @@
 - Persist defaults in a TOML config file and reuse named generation profiles (`config`, `profiles`, `gen --profile`)
 - Opt into schema caching and post-generation hooks when you need them (`--schema-cache-ttl`, `--run-hooks`)
 
+## Usage guide
+For a simple walkthrough that starts with interactive SDK generation and then shows the equivalent scriptable command, see [docs/USAGE.md](docs/USAGE.md).
+
 ## Installation
 
 ### Binary (no Python required)

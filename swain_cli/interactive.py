@@ -135,6 +135,14 @@ def _language_choice_title(lang: str) -> str:
         return "typescript-axios (TypeScript + axios, default for 'typescript')"
     if lang == "typescript-fetch":
         return "typescript-fetch (TypeScript + Fetch API)"
+    if lang == "javascript":
+        return "javascript (plain JavaScript)"
+    if lang == "dart":
+        return "dart (Dart)"
+    if lang == "dart-dio":
+        return "dart-dio (Dart/Flutter + Dio)"
+    if lang == "swift5":
+        return "swift5 (Swift 5, default for 'swift')"
     return lang
 
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Expand the interactive SDK language list with JavaScript, Dart/Dio, PHP, Rust, and Swift 5 while preserving `swift` as an alias for `swift5`.
+
 ## v0.3.18
 - Restore CI compatibility across the supported Python matrix by handling legacy entry-point metadata, Python 3.8 source builds, pytest stderr capture differences, and optional YAML mypy checks.
 

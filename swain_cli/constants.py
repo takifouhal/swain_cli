@@ -43,17 +43,22 @@ EXIT_CODE_SUBPROCESS = 1
 EXIT_CODE_USAGE = 2
 EXIT_CODE_INTERRUPT = 130
 
-LANGUAGE_ALIASES = {"typescript": "typescript-axios"}
+LANGUAGE_ALIASES = {"typescript": "typescript-axios", "swift": "swift5"}
 COMMON_LANGUAGES = [
     "python",
     "typescript-axios",
     "typescript-fetch",
+    "javascript",
+    "dart",
+    "dart-dio",
     "go",
     "java",
     "csharp",
+    "php",
     "ruby",
     "kotlin",
-    "swift",
+    "swift5",
+    "rust",
 ]
 
 HTTP_TIMEOUT_SECONDS = 30.0
